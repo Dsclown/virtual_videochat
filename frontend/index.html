@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>虚拟语音对话</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>虚拟语音对话</h1>
+      <p class="subtitle">模块化 · 聆听 → 思考 → 回应 · 表单记忆（非长历史）</p>
+      <p class="user-badge" id="userBadge"></p>
+    </header>
+
+    <section class="avatar-panel" id="avatarPanel">
+      <h2>Live2D（服务端渲染）</h2>
+      <div class="avatar-video-wrap">
+        <video id="avatarVideo" autoplay playsinline muted hidden></video>
+        <canvas id="avatarCanvas" hidden></canvas>
+        <img id="avatarFrame" alt="Live2D" hidden />
+        <p class="avatar-status" id="avatarStatus">视频流未连接</p>
+      </div>
+    </section>
+
+    <section class="profile-panel" id="profilePanel">
+      <h2>用户上下文表单</h2>
+      <dl>
+        <dt>用户画像</dt>
+        <dd id="pfProfile">—</dd>
+        <dt>目前在聊话题</dt>
+        <dd id="pfTopic">—</dd>
+        <dt>历史关注（每条为一行主题摘要）</dt>
+        <dd id="pfInterests">—</dd>
+      </dl>
+      <button type="button" id="btnLogout" class="btn ghost small">切换用户</button>
+    </section>
+
+    <section class="stage-panel" id="stagePanel">
+      <div class="stage-indicator" data-stage="listening">
+        <span class="dot"></span>
+        <span class="label">聆听</span>
+      </div>
+      <div class="stage-arrow">→</div>
+      <div class="stage-indicator" data-stage="thinking">
+        <span class="dot"></span>
+        <span class="label">思考</span>
+      </div>
+      <div class="stage-arrow">→</div>
+      <div class="stage-indicator" data-stage="speaking">
+        <span class="dot"></span>
+        <span class="label">回应</span>
+      </div>
+    </section>
+
+    <section class="status-bar">
+      <span id="statusText">连接中…</span>
+      <span class="mic-badge" id="micBadge" hidden>🎤 正在听</span>
+    </section>
+
+    <section class="live-transcript" id="liveTranscript">
+      <p class="live-label">实时识别</p>
+      <p class="live-text" id="liveText">—</p>
+    </section>
+
+    <section class="chat" id="chatLog"></section>
+
+    <section class="controls">
+      <button id="btnToggleListen" class="btn primary" disabled>开始聆听</button>
+      <button id="btnInterrupt" class="btn secondary" disabled>打断</button>
+      <button id="btnReset" class="btn ghost">清空对话</button>
+    </section>
+
+    <p class="hint">连接后点「开始聆听」，说话后停顿约 1 秒自动发送。需安装 ffmpeg。回应中可点「打断」。</p>
+  </div>
+  <audio id="ttsPlayer" style="display:none" preload="auto"></audio>
+  <script src="app.js?v=20"></script>
+</body>
+</html>

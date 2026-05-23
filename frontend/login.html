@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 — 虚拟语音对话</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app login-page">
+    <header>
+      <h1>登录</h1>
+      <p class="subtitle">仅需用户 ID，无密码。会话与画像按用户隔离。</p>
+    </header>
+    <form id="loginForm" class="login-form">
+      <label for="userId">用户 ID</label>
+      <input id="userId" name="userId" type="text" placeholder="例如 alice_01" autocomplete="username" required />
+      <p class="hint">仅允许字母、数字、下划线、横线，最长 64 字符</p>
+      <p id="loginError" class="login-error" hidden></p>
+      <button type="submit" class="btn primary">进入对话</button>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById("loginForm");
+    const errEl = document.getElementById("loginError");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const userId = document.getElementById("userId").value.trim();
+      errEl.hidden = true;
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          errEl.textContent = data.message || "登录失败";
+          errEl.hidden = false;
+          return;
+        }
+        localStorage.setItem("vv_user_id", data.user_id);
+        location.href = "/";
+      } catch (err) {
+        errEl.textContent = `网络错误: ${err.message}`;
+        errEl.hidden = false;
+      }
+    });
+    const saved = localStorage.getItem("vv_user_id");
+    if (saved) document.getElementById("userId").value = saved;
+  </script>
+</body>
+</html>

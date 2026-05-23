@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cubism SDK Live2D Render</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #1a1d27;
+      overflow: hidden;
+    }
+    #stage {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #status {
+      position: fixed;
+      left: 8px;
+      top: 8px;
+      color: #8b92a5;
+      font: 12px/1.4 system-ui, sans-serif;
+      pointer-events: none;
+      z-index: 9;
+    }
+  </style>
+  <script src="/live2d/libs/live2dcubismcore.min.js"></script>
+</head>
+<body>
+  <div id="status">loading…</div>
+  <div id="stage"></div>
+  <script type="module" src="./src/avatar-main.ts"></script>
+</body>
+</html>

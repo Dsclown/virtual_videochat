@@ -1,0 +1,24 @@
+# 复制为 /etc/coturn/turnserver.conf 后修改
+# sudo cp deploy/coturn/turnserver.conf.example /etc/coturn/turnserver.conf
+
+listening-port=3478
+listening-ip=YOUR_INTERNAL_IP
+relay-ip=YOUR_INTERNAL_IP
+external-ip=YOUR_PUBLIC_IP/YOUR_INTERNAL_IP
+
+fingerprint
+lt-cred-mech
+user=YOUR_TURN_USER:YOUR_TURN_PASSWORD
+realm=virtual_videochat
+
+min-port=49152
+max-port=65535
+
+no-cli
+no-tls
+no-dtls
+no-loopback-peers
+no-multicast-peers
+
+log-file=/var/log/coturn/turnserver.log
+simple-log

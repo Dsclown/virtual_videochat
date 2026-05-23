@@ -1,0 +1,81 @@
+# 复制为 config.yaml 后修改：cp config.example.yaml config.yaml
+
+system:
+  host: "0.0.0.0"
+  port: 8765
+  vad_executor_workers: 4
+  io_executor_workers: 4
+
+character:
+  name: "助手"
+  system_prompt_file: prompts/assistant.md
+
+llm:
+  provider: openai_api
+  api_key: ""                    # 必填：DeepSeek / OpenAI 等 API Key
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-v4-flash"
+  temperature: 0.8
+
+asr:
+  provider: sherpa_onnx
+  model_type: sense_voice
+  model_dir: "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+  num_threads: 2
+  provider_device: cpu
+  pool_size: 4
+
+tts:
+  provider: edge
+  voice: "zh-CN-XiaoxiaoNeural"
+
+memory:
+  provider: json_file
+  storage_dir: "data/users"
+
+profile:
+  storage_dir: "data/users"
+  max_interests: 5
+  profile_summary_min_chars: 40
+  profile_summary_max_chars: 280
+  topic_summary_max_chars: 120
+  interest_summary_max_chars: 80
+
+avatar:
+  provider: playwright
+  enabled: true
+  render_engine: cubism-sdk-live2d
+  model_name: shizuku
+  models_root: assets/live2d/models
+  server_base_url: "http://127.0.0.1:8765"
+  width: 480
+  height: 480
+  fps: 10
+  video_transport: webrtc          # webrtc | ws | auto
+  webrtc_enabled: true
+  suppress_ws_audio: true          # WebRTC 出声时不再走 WS MP3
+  ice_transport_policy: relay      # 跨网/SSH 建议 relay
+  ice_servers:
+    - urls: "stun:stun.l.google.com:19302"
+    - urls: "turn:YOUR_TURN_HOST:3478"
+      username: "YOUR_TURN_USER"
+      credential: "YOUR_TURN_PASSWORD"
+
+vad:
+  vad_model: silero_vad
+  silero_vad:
+    orig_sr: 16000
+    target_sr: 16000
+    prob_threshold: 0.45
+    db_threshold: 65
+    required_hits: 4
+    required_misses: 24
+    smoothing_window: 5
+    min_speech_duration_sec: 0.8
+  speech_filter:
+    enabled: true
+    min_rms: 0.015
+    min_rms_above_noise_ratio: 2.5
+    max_spectral_flatness: 0.62
+    skip_flatness_if_rms_above: 0.04
+    noise_floor_ema_alpha: 0.05

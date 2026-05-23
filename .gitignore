@@ -1,0 +1,15 @@
+.env
+.env.*
+config.yaml
+!config.example.yaml
+backend/.venv/
+**/node_modules/
+__pycache__/
+*.pyc
+data/
+!data/.gitkeep
+models/
+*.tar.bz2
+deploy/coturn/turnserver.conf
+render-engine/cubism-sdk-live2d/dist/
+assets/live2d/models
