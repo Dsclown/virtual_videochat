@@ -22,8 +22,6 @@ logger = logging.getLogger(__name__)
 
 # 音频入队上限；超出则丢帧，避免多轮后 task/线程池堆积
 _AUDIO_QUEUE_MAX = 16
-# Avatar JPEG 出站队列；满则丢旧帧，避免阻塞渲染循环
-_AVATAR_JPEG_QUEUE_MAX = 2
 
 
 class VoiceChatSession:
@@ -43,12 +41,8 @@ class VoiceChatSession:
         self._gen = 0
         self._turn_running = False
         self._outbox: asyncio.Queue[dict | None] = asyncio.Queue()
-        self._avatar_jpeg_out: asyncio.Queue[bytes | None] = asyncio.Queue(
-            maxsize=_AVATAR_JPEG_QUEUE_MAX
-        )
         self._audio_in: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
         self._writer_task: asyncio.Task[Any] | None = None
-        self._avatar_writer_task: asyncio.Task[Any] | None = None
         self._audio_task: asyncio.Task[Any] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -56,7 +50,6 @@ class VoiceChatSession:
 
     async def run(self) -> None:
         self._writer_task = asyncio.create_task(self._write_loop())
-        self._avatar_writer_task = asyncio.create_task(self._avatar_jpeg_loop())
         self._audio_task = asyncio.create_task(self._audio_loop())
         await self.send({"type": "await_auth"})
         try:
@@ -72,13 +65,10 @@ class VoiceChatSession:
             self.close()
             await self._audio_in.put(None)
             await self._outbox.put(None)
-            await self._avatar_jpeg_out.put(None)
             if self._audio_task:
                 await self._audio_task
             if self._writer_task:
                 await self._writer_task
-            if self._avatar_writer_task:
-                await self._avatar_writer_task
 
     async def _safe_dispatch(self, raw: dict) -> None:
         try:
@@ -103,29 +93,6 @@ class VoiceChatSession:
                 logger.exception("WS 文本发送失败 type=%s", msg.get("type"))
             finally:
                 self._outbox.task_done()
-
-    async def _avatar_jpeg_loop(self) -> None:
-        while True:
-            jpeg = await self._avatar_jpeg_out.get()
-            try:
-                if jpeg is None:
-                    return
-                await self._ws.send_bytes(jpeg)
-            except Exception:
-                logger.exception("Avatar JPEG 发送失败")
-            finally:
-                self._avatar_jpeg_out.task_done()
-
-    async def send_avatar_jpeg(self, jpeg: bytes) -> None:
-        if not jpeg:
-            return
-        if self._avatar_jpeg_out.full():
-            try:
-                self._avatar_jpeg_out.get_nowait()
-                self._avatar_jpeg_out.task_done()
-            except asyncio.QueueEmpty:
-                pass
-        await self._avatar_jpeg_out.put(jpeg)
 
     async def send(self, msg: dict) -> None:
         if msg.get("type") in TURN_TAG_TYPES:
@@ -254,7 +221,6 @@ class VoiceChatSession:
             "user_text": self._user_text,
             "webrtc_offer": self._webrtc_offer,
             "webrtc_ice": self._webrtc_ice,
-            "avatar_ws_start": self._avatar_ws_start,
         }
         if t == "control" and data.get("text") == "interrupt":
             await self.interrupt()
@@ -290,7 +256,6 @@ class VoiceChatSession:
             "vad_enabled": self._vad is not None,
             "avatar_enabled": self._ctx.playwright.enabled,
             "avatar_webrtc": self._ctx.config.avatar.webrtc_enabled,
-            "avatar_video_transport": self._ctx.config.avatar.video_transport,
             "ice_servers": ice_servers_for_browser(self._ctx.config.avatar),
             "ice_transport_policy": self._ctx.config.avatar.ice_transport_policy,
             "profile_form": {
@@ -331,23 +296,6 @@ class VoiceChatSession:
             await self._avatar.add_ice_candidate(data.get("candidate"))
         except Exception:
             logger.debug("添加 ICE candidate 失败", exc_info=True)
-
-    async def _avatar_ws_start(self, _data: dict) -> None:
-        if not self._ctx.playwright.enabled:
-            await self.send({"type": "error", "message": "Avatar 未启用"})
-            return
-        try:
-            if self._avatar is None:
-                self._avatar = AvatarStreamSession(
-                    self._ctx.playwright,
-                    self._ctx.config.avatar,
-                    send_ice=self.send,
-                )
-            await self._avatar.start_ws_stream(self.send_avatar_jpeg)
-            await self.send({"type": "avatar_ws_ok"})
-        except Exception as e:
-            logger.exception("Avatar WS 视频流启动失败")
-            await self.send({"type": "error", "message": f"Avatar 视频流失败: {e}"})
 
     async def _ping(self, _data: dict) -> None:
         await self.send({"type": "pong"})

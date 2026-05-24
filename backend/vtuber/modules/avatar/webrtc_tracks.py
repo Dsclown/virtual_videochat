@@ -20,11 +20,35 @@ def _black_rgb(width: int, height: int) -> tuple[bytes, int, int]:
     return (bytes(width * height * 3), width, height)
 
 
+def _rgb_bytes_for_plane(
+    data: bytes, width: int, height: int, stride: int
+) -> bytes:
+    """PyAV rgb24 行按 stride 对齐（如 360 宽 → 1088/行），与紧密打包 RGB 不同。"""
+    row_bytes = width * 3
+    need = stride * height
+    if len(data) == need:
+        return data
+    if len(data) != row_bytes * height:
+        raise ValueError(
+            f"RGB size mismatch: got {len(data)} bytes, "
+            f"expected {row_bytes * height} or {need} (stride={stride})"
+        )
+    if stride == row_bytes:
+        return data
+    out = bytearray(need)
+    for y in range(height):
+        src = y * row_bytes
+        dst = y * stride
+        out[dst : dst + row_bytes] = data[src : src + row_bytes]
+    return bytes(out)
+
+
 def _rgb_to_video_frame(
     data: bytes, width: int, height: int, *, pts: int, time_base: fractions.Fraction
 ) -> av.VideoFrame:
     rgb = av.VideoFrame(width, height, "rgb24")
-    rgb.planes[0].update(data)
+    plane = rgb.planes[0]
+    plane.update(_rgb_bytes_for_plane(data, width, height, plane.line_size))
     video = rgb.reformat(format="yuv420p")
     video.pts = pts
     video.time_base = time_base

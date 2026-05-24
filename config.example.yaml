@@ -48,10 +48,9 @@ avatar:
   model_name: shizuku
   models_root: assets/live2d/models
   server_base_url: "http://127.0.0.1:8765"
-  width: 480
-  height: 480
+  width: 360
+  height: 360
   fps: 10
-  video_transport: webrtc          # webrtc | ws | auto
   webrtc_enabled: true
   suppress_ws_audio: true          # WebRTC 出声时不再走 WS MP3
   ice_transport_policy: relay      # 跨网/SSH 建议 relay

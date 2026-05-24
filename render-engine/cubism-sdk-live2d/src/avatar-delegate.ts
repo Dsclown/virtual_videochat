@@ -2,6 +2,7 @@ import { CubismFramework, Option } from '@framework/live2dcubismframework';
 import { CubismLogError } from '@framework/utils/cubismdebug';
 
 import * as LAppDefine from './lappdefine';
+import { CanvasStreamCapture } from './canvas-capture';
 import { LAppPal } from './lapppal';
 import { LAppSubdelegate } from './lappsubdelegate';
 
@@ -44,6 +45,31 @@ export class AvatarDelegate {
     this._subdelegate.update();
   }
 
+  public getSourceCanvas(): HTMLCanvasElement | null {
+    return this._subdelegate?.getCanvas() ?? null;
+  }
+
+  public startCaptureStream(fps: number): boolean {
+    const canvas = this.getSourceCanvas();
+    if (!canvas) {
+      return false;
+    }
+    if (!this._capture) {
+      this._capture = new CanvasStreamCapture(canvas);
+    }
+    return this._capture.start(fps);
+  }
+
+  public stopCaptureStream(): void {
+    this._capture?.stop();
+    this._capture = null;
+  }
+
+  public captureFrameRgb(): { width: number; height: number; b64: string } | null {
+    this.tick();
+    return this._capture?.sampleRgbBase64() ?? null;
+  }
+
   public getDiagnostics(): Record<string, unknown> {
     const model = this._subdelegate?.getLive2DManager()?.getModel();
     const core = model?.getModel();
@@ -59,6 +85,7 @@ export class AvatarDelegate {
     }
     return {
       ready: this.isModelReady(),
+      captureStream: this._capture?.started ?? false,
       drawables,
       visible,
       modelUrl: LAppDefine.ModelUrl,
@@ -93,6 +120,7 @@ export class AvatarDelegate {
   }
 
   private release(): void {
+    this.stopCaptureStream();
     this._subdelegate?.release();
     this._subdelegate = null;
     CubismFramework.dispose();
@@ -105,6 +133,7 @@ export class AvatarDelegate {
 
   private _cubismOption: Option;
   private _subdelegate: LAppSubdelegate;
+  private _capture: CanvasStreamCapture | null = null;
 }
 
 declare global {
@@ -113,6 +142,9 @@ declare global {
       isReady(): boolean;
       setMouth(value: number): void;
       renderTick(): void;
+      startCaptureStream(fps: number): boolean;
+      stopCaptureStream(): void;
+      captureFrameRgb(): { width: number; height: number; b64: string } | null;
       getDiagnostics(): Record<string, unknown>;
     };
   }
@@ -131,6 +163,15 @@ export function mountAvatarBridge(): void {
     },
     renderTick(): void {
       delegate.tick();
+    },
+    startCaptureStream(fps: number): boolean {
+      return delegate.startCaptureStream(fps);
+    },
+    stopCaptureStream(): void {
+      delegate.stopCaptureStream();
+    },
+    captureFrameRgb(): { width: number; height: number; b64: string } | null {
+      return delegate.captureFrameRgb();
     },
     getDiagnostics(): Record<string, unknown> {
       return delegate.getDiagnostics();

@@ -5,10 +5,6 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from io import BytesIO
-
-from PIL import Image
-
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from vtuber.config.loader import AvatarConfig
@@ -26,13 +22,6 @@ from vtuber.modules.avatar.webrtc_utils import (
 logger = logging.getLogger(__name__)
 
 IceSendFn = Callable[[dict], Awaitable[None]]
-JpegSendFn = Callable[[bytes], Awaitable[None]]
-
-
-def _jpeg_to_rgb_bytes(jpeg: bytes) -> tuple[bytes, int, int]:
-    img = Image.open(BytesIO(jpeg)).convert("RGB")
-    w, h = img.size
-    return img.tobytes(), w, h
 
 
 @dataclass
@@ -56,12 +45,10 @@ class AvatarStreamSession:
         cfg: AvatarConfig,
         *,
         send_ice: IceSendFn | None = None,
-        send_jpeg: JpegSendFn | None = None,
     ):
         self._manager = manager
         self._cfg = cfg
         self._send_ice = send_ice
-        self._send_jpeg = send_jpeg
         self._renderer = PlaywrightRenderer(manager, cfg)
         self._pc: RTCPeerConnection | None = None
         self._video_track: AvatarVideoTrack | None = None
@@ -89,7 +76,7 @@ class AvatarStreamSession:
         return self._cfg.webrtc_enabled
 
     async def start(self, *, wait_ready: bool = True) -> None:
-        """幂等：WebRTC 失败切 WS 时不可重复开页/重复渲染循环。"""
+        """幂等：WebRTC 协商前启动渲染循环。"""
         if self._render_task and not self._render_task.done():
             return
 
@@ -126,12 +113,6 @@ class AvatarStreamSession:
         assert self._pc.localDescription
         logger.info("WebRTC answer 已生成 (ice=%s)", self._pc.iceConnectionState)
         return self._pc.localDescription.sdp
-
-    async def start_ws_stream(self, send_jpeg: JpegSendFn) -> None:
-        """经 WebSocket 二进制推送 JPEG（走现有 WS，不经巨型 JSON）。"""
-        self._send_jpeg = send_jpeg
-        await self.start()
-        logger.info("Avatar WebSocket 视频流已启动 (%dfps)", self._cfg.fps)
 
     async def add_ice_candidate(self, raw: dict | None) -> None:
         if not self._pc:
@@ -196,7 +177,8 @@ class AvatarStreamSession:
                 return None
             return self._latest_rgb
 
-    async def wait_video_frame(self, timeout: float = 0.2) -> tuple[bytes, int, int]:
+    async def wait_video_frame(self, timeout: float = 2.0) -> tuple[bytes, int, int]:
+        """仅在新抓帧（_frame_seq 前进）时返回，避免 WebRTC 重复编码同一帧导致客户端 framesDecoded 虚高。"""
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             async with self._frame_lock:
@@ -207,11 +189,11 @@ class AvatarStreamSession:
                     self._last_sent_frame_seq = self._frame_seq
                     self._last_good_rgb = self._latest_rgb
                     return self._latest_rgb
-            if self._last_good_rgb is not None:
-                return self._last_good_rgb
             if asyncio.get_running_loop().time() >= deadline:
+                if self._last_good_rgb is not None:
+                    return self._last_good_rgb
                 return _black_rgb(self._cfg.width, self._cfg.height)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)
 
     async def next_audio_chunk(self, byte_len: int) -> bytes:
         """WebRTC recv 只读预缓冲；PCM 推进由 _audio_prefetch_loop 按实时节拍负责。"""
@@ -271,17 +253,9 @@ class AvatarStreamSession:
                 frame_start = time.monotonic()
                 try:
                     await self._advance_mouth()
-                    jpeg = await self._renderer.capture_jpeg_bytes()
-                    if jpeg:
-                        send_jpeg = self._send_jpeg
-                        if send_jpeg:
-                            try:
-                                await send_jpeg(jpeg)
-                            except Exception:
-                                logger.debug("推送 avatar JPEG 失败", exc_info=True)
-                        rgb_bytes, w, h = await asyncio.to_thread(
-                            _jpeg_to_rgb_bytes, jpeg
-                        )
+                    rgb_frame = await self._renderer.capture_rgb()
+                    if rgb_frame:
+                        rgb_bytes, w, h = rgb_frame
                         async with self._frame_lock:
                             self._latest_rgb = (rgb_bytes, w, h)
                             self._last_good_rgb = self._latest_rgb
@@ -318,7 +292,6 @@ class AvatarStreamSession:
 
     async def close(self) -> None:
         self._running = False
-        self._send_jpeg = None
         for task in (self._render_task, self._audio_prefetch_task):
             if task and not task.done():
                 task.cancel()

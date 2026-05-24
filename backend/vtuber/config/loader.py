@@ -96,8 +96,6 @@ class AvatarConfig:
     width: int = 480
     height: int = 480
     fps: int = 20
-    # webrtc：低延迟同网；websocket：走 WS 传 JPEG（SSH 隧道/跨网）；auto：先 WebRTC 失败再 WS
-    video_transport: str = "auto"
     webrtc_enabled: bool = True
     # True 时 WS 不再下发 MP3，仅 WebRTC 出声（需 avatar 已连接）
     suppress_ws_audio: bool = False

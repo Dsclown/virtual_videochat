@@ -15,7 +15,7 @@ export class LAppGlManager {
 
   public initialize(canvas: HTMLCanvasElement): boolean {
     // glコンテキストを初期化
-    this._gl = canvas.getContext('webgl2');
+    this._gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
 
     if (!this._gl) {
       // gl初期化失敗

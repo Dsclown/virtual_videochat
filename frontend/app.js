@@ -1,65 +1,20 @@
-/** Avatar：WebRTC（同网）或 WebSocket JPEG（SSH/跨网） */
+/** Avatar：WebRTC 音视频（TURN 中继） */
 let avatarPc = null;
 let avatarStreamConnected = false;
-let avatarWsConnected = false;
 let avatarEnabled = false;
-let avatarVideoTransport = "auto";
 let avatarIceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 let avatarIceTransportPolicy = "all";
-let avatarWsStarting = false;
 let avatarWebRTCPumpActive = false;
 const avatarVideo = document.getElementById("avatarVideo");
 const avatarCanvas = document.getElementById("avatarCanvas");
 const avatarFrame = document.getElementById("avatarFrame");
 const avatarStatus = document.getElementById("avatarStatus");
+const avatarFpsEl = document.getElementById("avatarFps");
 let avatarCanvasCtx = avatarCanvas ? avatarCanvas.getContext("2d") : null;
-
-function showAvatarWsOnCanvas(source) {
-  if (!avatarCanvas || !avatarCanvasCtx) return;
-  const w = source.width;
-  const h = source.height;
-  if (avatarCanvas.width !== w || avatarCanvas.height !== h) {
-    avatarCanvas.width = w;
-    avatarCanvas.height = h;
-  }
-  avatarCanvasCtx.drawImage(source, 0, 0, w, h);
-  avatarCanvas.hidden = false;
-  if (avatarVideo) {
-    avatarVideo.hidden = true;
-    avatarVideo.style.opacity = "";
-    avatarVideo.style.pointerEvents = "";
-  }
-  if (avatarFrame) avatarFrame.hidden = true;
-  avatarWsConnected = true;
-}
-
-function showAvatarWsBlob(data) {
-  const blob =
-    data instanceof Blob
-      ? data
-      : new Blob([data], { type: "image/jpeg" });
-
-  if (typeof createImageBitmap === "function") {
-    createImageBitmap(blob)
-      .then((bitmap) => {
-        showAvatarWsOnCanvas(bitmap);
-        bitmap.close();
-      })
-      .catch(() => showAvatarWsBlobViaImg(blob));
-    return;
-  }
-  showAvatarWsBlobViaImg(blob);
-}
-
-function showAvatarWsBlobViaImg(blob) {
-  const img = new Image();
-  img.onload = () => {
-    showAvatarWsOnCanvas(img);
-    URL.revokeObjectURL(img.src);
-  };
-  img.onerror = () => URL.revokeObjectURL(img.src);
-  img.src = URL.createObjectURL(blob);
-}
+let avatarFpsMonitorActive = false;
+let avatarFpsStatsTimer = null;
+let avatarFpsLastDecoded = 0;
+let avatarFpsLastStatsAt = 0;
 
 function setAvatarStatus(text) {
   if (avatarStatus) avatarStatus.textContent = text;
@@ -79,6 +34,7 @@ function attachAvatarWebRTCStream(pc) {
   avatarStreamConnected = true;
   setAvatarStatus("Live2D 视频流已连接 (WebRTC)");
   startAvatarWebRTCPump();
+  startAvatarFpsMonitor();
   resumeAvatarWebRTCPlayback();
   return true;
 }
@@ -100,27 +56,80 @@ function scheduleAttachAvatarWebRTCStream(pc) {
   window.setTimeout(tryAttach, 1500);
 }
 
-function showAvatarWsFrame(b64) {
-  if (!b64) return;
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-  showAvatarWsBlob(new Blob([bytes], { type: "image/jpeg" }));
-}
-
-function startAvatarWsStream() {
-  if (!avatarEnabled || avatarWsConnected || avatarWsStarting) return;
-  avatarWsStarting = true;
-  closeAvatarWebRTC();
-  setAvatarStatus("正在连接 WS 视频流…");
-  sendJson({ type: "avatar_ws_start" });
-}
-
 function stopAvatarWebRTCPump() {
   avatarWebRTCPumpActive = false;
+  stopAvatarFpsMonitor();
 }
 
-/** WebRTC 解码后画到 canvas（与 WS 同路径，video 保留用于出声） */
+function setAvatarFpsDisplay(fps) {
+  if (!avatarFpsEl) return;
+  if (!Number.isFinite(fps) || fps <= 0) {
+    avatarFpsEl.hidden = true;
+    return;
+  }
+  avatarFpsEl.hidden = false;
+  avatarFpsEl.textContent = `解码 ${fps.toFixed(1)} fps`;
+}
+
+function stopAvatarFpsMonitor() {
+  avatarFpsMonitorActive = false;
+  if (avatarFpsStatsTimer != null) {
+    clearTimeout(avatarFpsStatsTimer);
+    avatarFpsStatsTimer = null;
+  }
+  avatarFpsLastDecoded = -1;
+  avatarFpsLastStatsAt = 0;
+  if (avatarFpsEl) avatarFpsEl.hidden = true;
+}
+
+/** WebRTC 解码帧率（framesDecoded 差分；不用 RVFC，低帧率流上易虚高到 ~60） */
+function startAvatarFpsMonitor() {
+  if (avatarFpsMonitorActive || !avatarVideo) return;
+  avatarFpsMonitorActive = true;
+  avatarFpsLastDecoded = -1;
+  avatarFpsLastStatsAt = 0;
+
+  const pollStats = async () => {
+    if (!avatarFpsMonitorActive) return;
+    if (!avatarPc) {
+      avatarFpsStatsTimer = window.setTimeout(pollStats, 500);
+      return;
+    }
+    const receiver = avatarPc
+      .getReceivers()
+      .find((r) => r.track && r.track.kind === "video");
+    if (!receiver) {
+      avatarFpsStatsTimer = window.setTimeout(pollStats, 500);
+      return;
+    }
+    try {
+      const stats = await receiver.getStats();
+      let inbound = null;
+      stats.forEach((report) => {
+        if (report.type !== "inbound-rtp" || report.kind !== "video") return;
+        const decoded = report.framesDecoded ?? 0;
+        if (!inbound || decoded > (inbound.framesDecoded ?? 0)) inbound = report;
+      });
+      if (inbound && typeof inbound.framesDecoded === "number") {
+        const decoded = inbound.framesDecoded;
+        const now = performance.now();
+        if (avatarFpsLastDecoded >= 0 && avatarFpsLastStatsAt > 0) {
+          const dt = (now - avatarFpsLastStatsAt) / 1000;
+          const df = decoded - avatarFpsLastDecoded;
+          if (dt >= 0.4 && df >= 0) setAvatarFpsDisplay(df / dt);
+        }
+        avatarFpsLastDecoded = decoded;
+        avatarFpsLastStatsAt = now;
+      }
+    } catch {
+      /* ignore */
+    }
+    avatarFpsStatsTimer = window.setTimeout(pollStats, 500);
+  };
+  pollStats();
+}
+
+/** WebRTC 解码后画到 canvas（video 保留用于出声） */
 function drawAvatarWebRTCFrame() {
   if (!avatarCanvas || !avatarCanvasCtx || !avatarVideo) return;
   const w = avatarVideo.videoWidth;
@@ -154,20 +163,12 @@ function startAvatarWebRTCPump() {
 function closeAvatarStreams() {
   stopAvatarWebRTCPump();
   avatarStreamConnected = false;
-  avatarWsConnected = false;
-  avatarWsStarting = false;
   if (avatarVideo) {
     avatarVideo.pause();
     avatarVideo.srcObject = null;
     avatarVideo.hidden = true;
     avatarVideo.style.opacity = "";
     avatarVideo.style.pointerEvents = "";
-  }
-  if (avatarFrame) {
-    if (avatarFrame._blobUrl) URL.revokeObjectURL(avatarFrame._blobUrl);
-    avatarFrame._blobUrl = null;
-    avatarFrame.removeAttribute("src");
-    avatarFrame.hidden = true;
   }
   if (avatarCanvas && avatarCanvasCtx) {
     avatarCanvasCtx.clearRect(0, 0, avatarCanvas.width, avatarCanvas.height);
@@ -182,14 +183,8 @@ function closeAvatarStreams() {
 
 function startAvatarVideo() {
   if (!avatarEnabled) return;
-  const mode = avatarVideoTransport || "auto";
-  if (mode === "websocket") {
-    startAvatarWsStream();
-    return;
-  }
   startAvatarWebRTC().catch((e) => {
     setAvatarStatus(`WebRTC: ${e.message}`);
-    if (mode === "auto") startAvatarWsStream();
   });
 }
 
@@ -232,11 +227,10 @@ async function startAvatarWebRTC() {
       scheduleAttachAvatarWebRTCStream(avatarPc);
     } else if (st === "failed") {
       avatarStreamConnected = false;
-      setAvatarStatus("WebRTC 失败，切换 WS…");
-      if (avatarVideoTransport === "auto") startAvatarWsStream();
+      setAvatarStatus("WebRTC 连接失败");
     } else if (st === "closed" || st === "disconnected") {
       avatarStreamConnected = false;
-      if (!avatarWsConnected) setAvatarStatus(`视频流 ${st || "断开"}`);
+      setAvatarStatus(`视频流 ${st || "断开"}`);
     }
   };
   avatarPc.addTransceiver("video", { direction: "recvonly" });
@@ -421,7 +415,6 @@ function handleServerMessage(msg) {
       authed = true;
       vadEnabled = !!msg.vad_enabled;
       avatarEnabled = !!msg.avatar_enabled;
-      avatarVideoTransport = msg.avatar_video_transport || "auto";
       if (Array.isArray(msg.ice_servers) && msg.ice_servers.length) {
         avatarIceServers = msg.ice_servers;
       }
@@ -433,19 +426,11 @@ function handleServerMessage(msg) {
         "system",
         `已登录 ${msg.user_id}${vadEnabled ? "（Silero VAD）" : "（VAD 未启用）"}`
       );
-      if (avatarEnabled && (msg.avatar_webrtc || msg.avatar_video_transport === "websocket")) {
+      if (avatarEnabled && msg.avatar_webrtc) {
         startAvatarVideo();
       } else if (avatarEnabled) {
-        setAvatarStatus("Avatar 已启用");
+        setAvatarStatus("Avatar 已启用（WebRTC 未开）");
       }
-      break;
-    case "avatar_ws_ok":
-      avatarWsStarting = false;
-      avatarWsConnected = true;
-      setAvatarStatus("Live2D 视频流已连接 (WS)");
-      break;
-    case "avatar_frame":
-      if (msg.data) showAvatarWsFrame(msg.data);
       break;
     case "webrtc_answer":
       if (!avatarPc) break;
@@ -542,7 +527,6 @@ function handleServerMessage(msg) {
       appendMsg("system", msg.message);
       if (msg.message && String(msg.message).includes("Avatar")) {
         setAvatarStatus(`Avatar: ${msg.message}`);
-        if (avatarVideoTransport === "auto") startAvatarWsStream();
       }
       setStage("listening");
       stopPlayback();
@@ -681,7 +665,7 @@ function connect() {
   };
   ws.onmessage = (e) => {
     if (typeof e.data !== "string") {
-      if (avatarEnabled) showAvatarWsBlob(e.data);
+      console.warn("收到非 JSON WS 二进制消息，已忽略");
       return;
     }
     handleServerMessage(JSON.parse(e.data));
