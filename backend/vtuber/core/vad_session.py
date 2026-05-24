@@ -104,7 +104,7 @@ class VadSession:
 
             ok, reason = is_probably_speech(pcm, self._filter, self._noise_floor)
             if not ok:
-                logger.info(
+                logger.debug(
                     "非人声切段已丢弃 %.2fs: %s (floor=%.4f)",
                     pcm.size / 16000,
                     reason,
@@ -119,7 +119,7 @@ class VadSession:
 
             await self._send({"type": "vad", "event": VadEventType.SPEECH_END.value})
             pcm_segment = pcm
-            logger.info("VAD 人声切段 %.2fs (%s)", pcm.size / 16000, reason)
+            logger.debug("VAD 人声切段 %.2fs (%s)", pcm.size / 16000, reason)
 
         if ended_utterance:
             self._in_speech = False

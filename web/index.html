@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>虚拟语音对话</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>虚拟语音对话</h1>
+      <p class="subtitle">Web 测试端 · 经 Gateway 连 Core · WebRTC 虚拟人</p>
+      <p class="user-badge" id="userBadge"></p>
+    </header>
+
+    <div class="main-layout">
+      <aside class="avatar-column">
+        <section class="avatar-panel" id="avatarPanel">
+          <h2>Live2D（服务端渲染）</h2>
+          <div class="avatar-video-wrap">
+            <video id="avatarVideo" autoplay playsinline hidden></video>
+            <canvas id="avatarCanvas" hidden></canvas>
+            <span id="avatarFps" class="avatar-fps" hidden>—</span>
+            <p class="avatar-status" id="avatarStatus">视频流未连接</p>
+          </div>
+        </section>
+      </aside>
+
+      <div class="chat-column">
+        <section class="status-bar">
+          <span id="statusText">连接中…</span>
+          <span class="mic-badge" id="micBadge" hidden>🎤 正在听</span>
+        </section>
+
+        <section class="live-transcript" id="liveTranscript">
+          <p class="live-label">字幕 / 实时识别</p>
+          <p class="live-text" id="liveText">—</p>
+        </section>
+
+        <section class="chat" id="chatLog"></section>
+
+        <section class="controls">
+          <button id="btnToggleListen" class="btn primary" disabled>开始聆听</button>
+          <button id="btnReset" class="btn ghost">清空对话</button>
+          <button type="button" id="btnLogout" class="btn ghost small">切换用户</button>
+        </section>
+
+        <p class="hint">视频连接后点「开始聆听」；说话后停顿约 1 秒自动发送。用户开口时会自动打断 AI（无需手动按钮）。</p>
+      </div>
+    </div>
+  </div>
+  <audio id="ttsPlayer" style="display:none" preload="auto"></audio>
+  <script src="/gateway-config.js"></script>
+  <script src="/gateway-client.js"></script>
+  <script src="app.js?v=30"></script>
+</body>
+</html>

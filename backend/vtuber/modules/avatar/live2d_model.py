@@ -55,7 +55,7 @@ class Live2dModel:
             raise ValueError("model_dict.json 应为数组")
         for item in data:
             if isinstance(item, dict) and item.get("name") == model_name:
-                logger.info("Live2D model_dict 已加载: %s", model_name)
+                logger.debug("Live2D model_dict 已加载: %s", model_name)
                 return item
         raise KeyError(f"{model_name} 不在 {self.model_dict_path}")
 

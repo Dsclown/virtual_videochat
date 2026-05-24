@@ -1,4 +1,4 @@
-"""WebRTC 工具：ICE 等待与 candidate 解析。"""
+"""Gateway WebRTC：ICE / SDP 工具。"""
 
 import asyncio
 import logging
@@ -8,33 +8,16 @@ from typing import Any
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 
-from vtuber.config.loader import AvatarConfig, IceServerConfig
+from gateway.config import GatewayAvatarConfig
 
 logger = logging.getLogger(__name__)
 
 IceSendFn = Callable[[dict], Awaitable[None]]
 
 
-def ice_server_to_dict(entry: IceServerConfig) -> dict[str, Any]:
-    out: dict[str, Any] = {"urls": entry.urls}
-    if entry.username:
-        out["username"] = entry.username
-    if entry.credential:
-        out["credential"] = entry.credential
-    return out
-
-
-def ice_servers_for_browser(cfg: AvatarConfig) -> list[dict[str, Any]]:
-    return [ice_server_to_dict(s) for s in cfg.ice_servers]
-
-
-def rtc_configuration_from_avatar(cfg: AvatarConfig) -> RTCConfiguration:
+def rtc_configuration(cfg: GatewayAvatarConfig) -> RTCConfiguration:
     servers = [
-        RTCIceServer(
-            urls=s.urls,
-            username=s.username,
-            credential=s.credential,
-        )
+        RTCIceServer(urls=s.urls, username=s.username, credential=s.credential)
         for s in cfg.ice_servers
     ]
     return RTCConfiguration(iceServers=servers or None)
@@ -46,7 +29,7 @@ async def wait_ice_gathering(pc: RTCPeerConnection, timeout: float = 10.0) -> No
     deadline = asyncio.get_running_loop().time() + timeout
     while pc.iceGatheringState != "complete":
         if asyncio.get_running_loop().time() >= deadline:
-            logger.warning("ICE gathering 超时 (%ss)，继续用当前 SDP", timeout)
+            logger.warning("ICE gathering 超时 (%ss)", timeout)
             return
         await asyncio.sleep(0.05)
 

@@ -1,18 +1,16 @@
 from abc import ABC, abstractmethod
 
+from vtuber.modules.memory.types import ChatTurn
+
 
 class MemoryModule(ABC):
     @abstractmethod
-    def load_messages(self) -> list[dict]:
-        """加载用户对话记录（OpenAI message 格式）。"""
+    def load_today_turns(self) -> list[ChatTurn]:
+        """加载当日全部对话轮次（登录/会话建立时调用一次）。"""
 
     @abstractmethod
-    def save_messages(self, messages: list[dict]) -> None:
-        """持久化对话记录到 main.jsonl。"""
-
-    @abstractmethod
-    def append(self, role: str, content: str) -> None:
-        pass
+    def append_turn(self, user: str, assistant: str) -> ChatTurn:
+        """追加一轮对话并持久化。"""
 
     @abstractmethod
     def clear(self) -> None:

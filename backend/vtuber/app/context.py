@@ -50,7 +50,7 @@ class ServiceContext:
         self._io_executor = ThreadPoolExecutor(
             max_workers=io_workers, thread_name_prefix="io"
         )
-        logger.info(
+        logger.debug(
             "ServiceContext 已加载 llm/asr/tts/profile/avatar vad=%s asr_pool=%d vad_workers=%d avatar=%s",
             "shared" if self._vad_backend else "off",
             self.config.asr.pool_size,

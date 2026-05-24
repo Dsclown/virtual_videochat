@@ -28,7 +28,7 @@ class PlaywrightManager:
                 return
             from playwright.async_api import async_playwright
 
-            logger.info("启动 Playwright Chromium …")
+            logger.debug("启动 Playwright Chromium …")
             self._playwright = await async_playwright().start()
             try:
                 self._browser = await self._playwright.chromium.launch(
@@ -48,7 +48,7 @@ class PlaywrightManager:
                 if "Executable doesn't exist" in str(e):
                     raise RuntimeError(hint) from e
                 raise
-            logger.info("Playwright Chromium 已就绪")
+            logger.debug("Playwright Chromium 已就绪")
 
     async def new_page(self):
         await self.ensure_browser()
@@ -91,4 +91,4 @@ class PlaywrightManager:
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
-        logger.info("Playwright 已关闭")
+        logger.debug("Playwright 已关闭")

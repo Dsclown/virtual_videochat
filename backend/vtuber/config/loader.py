@@ -5,7 +5,11 @@ from typing import Any
 
 import yaml
 
-from vtuber.prompts.loader import DEFAULT_SYSTEM_PROMPT_FILE, load_prompt_file
+from vtuber.prompts.loader import (
+    DEFAULT_PROFILE_FORM_RULES_FILE,
+    DEFAULT_SYSTEM_PROMPT_FILE,
+    load_prompt_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,27 +82,20 @@ class TTSConfig:
 class MemoryConfig:
     provider: str
     storage_dir: str
+    llm_context_rounds: int
 
 
 @dataclass
 class ProfileConfig:
     storage_dir: str
-    max_interests: int
-    profile_summary_min_chars: int
-    profile_summary_max_chars: int
-    topic_summary_max_chars: int
-    interest_summary_max_chars: int
-
-
-@dataclass
-class IceServerConfig:
-    urls: str | list[str]
-    username: str | None = None
-    credential: str | None = None
+    form_rules_file: str
+    form_update_instruction: str
 
 
 @dataclass
 class AvatarConfig:
+    """Core 侧 Avatar 配置（ICE/WebRTC 由 Gateway 读取，不在此加载）。"""
+
     provider: str
     enabled: bool
     render_engine: str
@@ -108,9 +105,6 @@ class AvatarConfig:
     width: int
     height: int
     fps: int
-    webrtc_enabled: bool
-    ice_servers: list[IceServerConfig]
-    ice_transport_policy: str
     model_dict_path: str
     live2d_expressions_enabled: bool
     view_scale: float
@@ -191,24 +185,36 @@ def _strict_dataclass(
     return kwargs if as_dict else cls(**kwargs)
 
 
+# Gateway 独立读取的 avatar 字段（config.yaml 可保留，Core 忽略）
+_GATEWAY_AVATAR_KEYS = frozenset({
+    "ice_servers",
+    "ice_transport_policy",
+    "webrtc_enabled",
+})
+
+
 def _load_avatar_config(avatar_raw: dict[str, Any]) -> AvatarConfig:
-    avatar_raw = dict(avatar_raw)
-    if "ice_servers" not in avatar_raw:
-        raise ConfigError("avatar 缺少 ice_servers")
-    ice_raw = avatar_raw.pop("ice_servers")
-    if not isinstance(ice_raw, list) or not ice_raw:
-        raise ConfigError("avatar.ice_servers 必须为非空列表")
-    ice_servers = [
-        IceServerConfig(**item)
-        if isinstance(item, dict)
-        else IceServerConfig(urls=str(item))
-        for item in ice_raw
-    ]
-    kwargs = _strict_dataclass(
-        AvatarConfig, avatar_raw, "avatar", skip=frozenset({"ice_servers"}), as_dict=True
+    avatar_raw = {k: v for k, v in avatar_raw.items() if k not in _GATEWAY_AVATAR_KEYS}
+    return AvatarConfig(
+        **_strict_dataclass(AvatarConfig, avatar_raw, "avatar", as_dict=True)
     )
-    kwargs["ice_servers"] = ice_servers
-    return AvatarConfig(**kwargs)
+
+
+def _load_profile_config(profile_raw: dict[str, Any]) -> ProfileConfig:
+    form_rules_file = str(
+        profile_raw.get("form_rules_file", DEFAULT_PROFILE_FORM_RULES_FILE)
+    )
+    allowed = {f.name for f in fields(ProfileConfig)} - {"form_update_instruction"}
+    extra = set(profile_raw) - allowed
+    if extra:
+        raise ConfigError(f"profile 含未知配置项: {sorted(extra)}")
+    if "storage_dir" not in profile_raw:
+        raise ConfigError("profile 缺少 storage_dir")
+    return ProfileConfig(
+        storage_dir=str(profile_raw["storage_dir"]),
+        form_rules_file=form_rules_file,
+        form_update_instruction=load_prompt_file(form_rules_file),
+    )
 
 
 def _load_character_config(char_raw: dict[str, Any]) -> CharacterConfig:
@@ -282,7 +288,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         asr=_strict_dataclass(ASRConfig, _require_section(raw, "asr"), "asr"),
         tts=_strict_dataclass(TTSConfig, _require_section(raw, "tts"), "tts"),
         memory=_strict_dataclass(MemoryConfig, _require_section(raw, "memory"), "memory"),
-        profile=_strict_dataclass(ProfileConfig, _require_section(raw, "profile"), "profile"),
+        profile=_load_profile_config(_require_section(raw, "profile")),
         avatar=_load_avatar_config(_require_section(raw, "avatar")),
         vad=_load_vad_config(_require_section(raw, "vad")),
     )

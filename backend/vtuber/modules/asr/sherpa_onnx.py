@@ -78,10 +78,10 @@ class SherpaOnnxASR(ASRModule):
             text = await asyncio.to_thread(_transcribe_np, recognizer, audio)
         finally:
             self._pool.put_nowait(recognizer)
-        logger.info("ASR 结果: %r", text)
+        logger.debug("ASR 结果: %r", text)
         return text
 
     async def transcribe(self, audio_bytes: bytes, mime_hint: str = "audio/webm") -> str:
-        logger.info("ASR 转码识别，音频 %d bytes", len(audio_bytes))
+        logger.debug("ASR 转码识别，音频 %d bytes", len(audio_bytes))
         pcm = bytes_to_pcm16(audio_bytes, mime_hint)
         return await self.transcribe_pcm(pcm)

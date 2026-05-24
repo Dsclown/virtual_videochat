@@ -6,7 +6,7 @@ import logging
 from typing import Awaitable, Callable
 
 from vtuber.modules.tts.base import TTSModule
-from vtuber.modules.avatar.stream_session import AvatarStreamSession
+from vtuber.modules.avatar.render_session import AvatarRenderSession
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class TtsSession:
         send: SendFn,
         tts: TTSModule,
         *,
-        avatar: AvatarStreamSession | None = None,
+        avatar: AvatarRenderSession | None = None,
     ):
         self._send = send
         self._tts = tts
@@ -218,7 +218,7 @@ class TtsSession:
         self._drain_queue()
         self._sequence = 0
         self._next_to_send = 0
-        logger.info("TTS 已取消释放 (%d 句)", total)
+        logger.debug("TTS 已取消释放 (%d 句)", total)
 
     def _release(self, total: int) -> None:
         self._shutdown = True
@@ -227,7 +227,7 @@ class TtsSession:
         self._drain_queue()
         self._sequence = 0
         self._next_to_send = 0
-        logger.info("TTS 回合资源已释放 (%d 句)", total)
+        logger.debug("TTS 回合资源已释放 (%d 句)", total)
 
     def _drain_queue(self) -> None:
         while True:

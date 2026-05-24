@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 # backend/vtuber/prompts/loader.py -> 项目根 virtual_videochat
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SYSTEM_PROMPT_FILE = "prompts/assistant.md"
+DEFAULT_PROFILE_FORM_RULES_FILE = "prompts/profile_form_rules.md"
 
 
 def load_prompt_file(rel_path: str) -> str:
@@ -16,7 +17,7 @@ def load_prompt_file(rel_path: str) -> str:
     for encoding in ("utf-8", "utf-8-sig", "gbk"):
         try:
             text = path.read_text(encoding=encoding).strip()
-            logger.info("已加载 prompt: %s (%d 字符)", path, len(text))
+            logger.debug("已加载 prompt: %s (%d 字符)", path, len(text))
             return text
         except UnicodeDecodeError:
             continue

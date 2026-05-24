@@ -6,12 +6,10 @@ import numpy as np
 
 from vtuber.app.context import ServiceContext
 from vtuber.core.stages import Stage
-from vtuber.modules.avatar.stream_session import AvatarStreamSession
-from vtuber.modules.memory.factory import MemoryFactory
-from vtuber.modules.profile.form import (
-    build_form_update_instruction,
-    parse_reply_with_form,
-)
+from vtuber.modules.avatar.render_session import AvatarRenderSession
+from vtuber.modules.memory.base import MemoryModule
+from vtuber.modules.memory.types import ChatTurn
+from vtuber.modules.profile.form import parse_reply_with_form
 from vtuber.modules.avatar.live2d_model import Live2dModel
 from vtuber.modules.tts.session import TtsSession
 from vtuber.utils.sentence_buffer import (
@@ -39,13 +37,18 @@ class ConversationOrchestrator:
         user_id: str,
         send: SendFn,
         *,
-        avatar: AvatarStreamSession | None = None,
+        avatar: AvatarRenderSession | None = None,
+        memory: MemoryModule | None = None,
+        chat_turns: list[ChatTurn] | None = None,
+        llm_context_rounds: int = 5,
     ):
         self._ctx = ctx
         self._user_id = user_id
         self._send = send
         self._avatar = avatar
-        self._memory = MemoryFactory.create(ctx.config.memory, user_id)
+        self._memory = memory
+        self._chat_turns = chat_turns if chat_turns is not None else []
+        self._llm_context_rounds = max(0, llm_context_rounds)
         self._cancel = asyncio.Event()
         self._tts: TtsSession | None = None
 
@@ -107,7 +110,6 @@ class ConversationOrchestrator:
             return
 
         await self._send({"type": "user_text", "text": user_text})
-        await self._ctx.run_io(self._memory.append, "user", user_text)
         await self._set_stage(Stage.THINKING)
 
         async with TtsSession(
@@ -122,7 +124,11 @@ class ConversationOrchestrator:
                 return
 
             reply_text, form_update = parse_reply_with_form(full_reply)
-            await self._ctx.run_io(self._memory.append, "assistant", reply_text)
+            if self._memory:
+                turn = await self._ctx.run_io(
+                    self._memory.append_turn, user_text, reply_text
+                )
+                self._chat_turns.append(turn)
 
             updated = await self._ctx.run_io(
                 self._ctx.profile.apply_update, self._user_id, form_update
@@ -132,7 +138,7 @@ class ConversationOrchestrator:
                 "profile_form": {
                     "user_profile": updated.user_profile,
                     "current_topic": updated.current_topic,
-                    "historical_interests": updated.historical_interests,
+                    "historical_interests": updated.interests_for_api(),
                 },
             })
 
@@ -175,13 +181,13 @@ class ConversationOrchestrator:
                         break
                     token_count += 1
                     if token_count == 1:
-                        logger.info("LLM 首 token 到达")
+                        logger.debug("LLM 首 token 到达")
                     full_reply += token
                     speech_buffer, tts_offset, speaking = await self._feed_tokens(
                         full_reply, speech_buffer, tts_offset, speaking, tts
                     )
         except asyncio.CancelledError:
-            logger.info("对话任务已取消")
+            logger.debug("对话任务已取消")
             raise
         except Exception:
             logger.exception("LLM failed")
@@ -199,7 +205,7 @@ class ConversationOrchestrator:
         tail = f"{speech_buffer}{reply_text[tts_offset:]}".strip()
         for sentence in flush_remaining(tail):
             speaking = await self._speak(sentence, speaking, tts)
-        logger.info("LLM 流结束，共 %d 字", len(full_reply))
+        logger.debug("LLM 流结束，共 %d 字", len(full_reply))
         return full_reply
 
     async def _feed_tokens(
@@ -260,7 +266,7 @@ class ConversationOrchestrator:
         pcfg = self._ctx.config.profile
         system = (
             f"{self._ctx.config.character.system_prompt.strip()}\n\n"
-            f"{build_form_update_instruction(pcfg)}\n\n"
+            f"{pcfg.form_update_instruction}\n\n"
             f"--- 当前用户上下文表单 ---\n{form.to_prompt_block()}"
         )
         l2d = self._ctx.live2d_model
@@ -269,7 +275,13 @@ class ConversationOrchestrator:
             if expr_prompt:
                 system = f"{system}\n\n{expr_prompt}"
         user_content = f"{ASR_USER_PREFIX}用户说：{user_text}" if from_asr else user_text
-        return [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ]
+        messages: list[dict] = [{"role": "system", "content": system}]
+        if self._llm_context_rounds > 0 and self._chat_turns:
+            recent = self._chat_turns[-self._llm_context_rounds :]
+            for turn in recent:
+                if turn.user.strip():
+                    messages.append({"role": "user", "content": turn.user})
+                if turn.assistant.strip():
+                    messages.append({"role": "assistant", "content": turn.assistant})
+        messages.append({"role": "user", "content": user_content})
+        return messages

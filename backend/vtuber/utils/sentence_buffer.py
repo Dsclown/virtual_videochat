@@ -2,10 +2,10 @@
 
 import re
 
-_SENTENCE_END = re.compile(r"(?<=[。！？；.!?…\n])")
+_SENTENCE_END = re.compile(r"(?<=[。！？；.!?…\n~～])")
 # 无句末标点时：仅在过长时按空格弱切或硬切（不在逗号处切，避免句间停顿过长）
 _MAX_TTS_CHARS = 180
-_WEAK_SPLIT_AT = 80  # 流式过程中无句末标点，达到该长度即尝试弱分隔
+_WEAK_SPLIT_AT = 120  # 流式过程中无句末标点，达到该长度即尝试弱分隔
 # 弱分隔：半角/全角空格、制表（不含逗号）
 _WEAK_SEPS = ("\u3000", " ", "\t")
 # 口语与 JSON 分界（同行或换行后的 {）
@@ -13,31 +13,51 @@ _JSON_START = re.compile(
     r'(\n\s*\{|\{\s*"form_update"|\{\s*\'form_update\')',
     re.IGNORECASE,
 )
+_MARKDOWN_FENCE_LINE = re.compile(r"^```(?:json)?\s*$", re.IGNORECASE)
 
 
 def truncate_before_json(text: str) -> str:
-    """截断 JSON 起点之前的内容，供 TTS 使用。"""
+    """截断 JSON / markdown 围栏起点之前的内容，供 TTS 与展示使用。"""
     if not text:
         return ""
+    lower = text.lower()
+    for needle in ("```json", "```"):
+        i = lower.find(needle)
+        if i != -1:
+            text = text[:i]
+            lower = text.lower()
     m = _JSON_START.search(text)
     if m:
         text = text[: m.start()]
     lines = text.split("\n")
-    while lines and lines[-1].strip().startswith("{"):
-        lines.pop()
+    while lines:
+        tail = lines[-1].strip()
+        if tail.startswith("{") or _MARKDOWN_FENCE_LINE.match(tail):
+            lines.pop()
+        else:
+            break
     return "\n".join(lines).rstrip()
 
 
 def is_tts_safe_sentence(s: str) -> bool:
     """过滤误送入 TTS 的 JSON / 表单字段片段。"""
     s = s.strip()
-    if not s or s.startswith("{"):
+    if not s or s.startswith("{") or _MARKDOWN_FENCE_LINE.match(s):
+        return False
+    if s.lower() in ("json", "`", "``", "```"):
         return False
     if "form_update" in s:
         return False
-    if re.search(r'"(user_profile|current_topic|historical_interests)"\s*:', s):
+    if re.search(
+        r'"(user_profile|current_topic|historical_interests|historical_interest_updates)"\s*:',
+        s,
+    ):
         return False
-    if re.search(r"[\{\}\[\]]", s) and ("user_profile" in s or "historical_interests" in s):
+    if re.search(r"[\{\}\[\]]", s) and (
+        "user_profile" in s
+        or "historical_interests" in s
+        or "historical_interest_updates" in s
+    ):
         return False
     return True
 

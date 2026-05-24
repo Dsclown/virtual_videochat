@@ -2,7 +2,7 @@
 
 system:
   host: "0.0.0.0"
-  port: 8765
+  port: 8765   # Gateway HTTP；Web 测试页默认 8780（见 ./start.sh / VVC_WEB_PORT）
   vad_executor_workers: 1   # Silero VAD 线程池；多人时再调高
   io_executor_workers: 1
 
@@ -32,14 +32,11 @@ tts:
 memory:
   provider: json_file
   storage_dir: "data/users"
+  llm_context_rounds: 5   # 送入 LLM 的最近对话轮数（每轮含 user+assistant）
 
 profile:
   storage_dir: "data/users"
-  max_interests: 5
-  profile_summary_min_chars: 40
-  profile_summary_max_chars: 280
-  topic_summary_max_chars: 120
-  interest_summary_max_chars: 80
+  form_rules_file: prompts/profile_form_rules.md   # 表单更新规则，字数上限见该文件
 
 avatar:
   provider: playwright

@@ -1,23 +1,53 @@
-"""单连接 Live2D 离屏页：canvas.captureStream 抓 RGB 帧 + 嘴型。"""
+"""单连接 Live2D 离屏页：浏览器 rAF 渲染 + JPEG 截图抓 RGB。"""
 
 import asyncio
-import base64
 import logging
+from io import BytesIO
+
+from PIL import Image
+from playwright.async_api import Locator, Page
 
 from vtuber.config.loader import AvatarConfig
 from vtuber.modules.avatar.playwright_manager import PlaywrightManager
 
 logger = logging.getLogger(__name__)
 
+_CANVAS_SELECTOR = "#live2d-canvas"
+_JPEG_QUALITY = 82
+
+_START_RENDER_LOOP_JS = """(fps) => {
+  if (window.__vvcRenderLoop) return;
+  window.__vvcRenderLoop = true;
+  const ms = 1000 / Math.max(1, fps);
+  let last = performance.now();
+  const step = (now) => {
+    if (!window.__vvcRenderLoop) return;
+    if (now - last >= ms) {
+      window.__avatar?.renderTick?.();
+      last = now;
+    }
+    window.__vvcRenderLoopHandle = requestAnimationFrame(step);
+  };
+  window.__vvcRenderLoopHandle = requestAnimationFrame(step);
+}"""
+
+_STOP_RENDER_LOOP_JS = """() => {
+  window.__vvcRenderLoop = false;
+  if (window.__vvcRenderLoopHandle) {
+    cancelAnimationFrame(window.__vvcRenderLoopHandle);
+    window.__vvcRenderLoopHandle = 0;
+  }
+}"""
+
 
 class PlaywrightRenderer:
     def __init__(self, manager: PlaywrightManager, cfg: AvatarConfig):
         self._manager = manager
         self._cfg = cfg
-        self._page = None
+        self._page: Page | None = None
+        self._canvas: Locator | None = None
         self._mouth = 0.0
         self._closed = False
-        self._stream_started = False
 
     async def _page_ready(self) -> bool:
         if self._closed or not self._page:
@@ -41,12 +71,12 @@ class PlaywrightRenderer:
             except Exception:
                 pass
             self._page = None
-            self._stream_started = False
+            self._canvas = None
 
         self._closed = False
         self._page = await self._manager.new_page()
         url = self._manager.render_page_url()
-        logger.info("Avatar 渲染页: %s", url)
+        logger.debug("Avatar 渲染页: %s", url)
         await self._page.goto(url, wait_until="domcontentloaded", timeout=120_000)
         if wait_ready:
             await self._wait_until_ready()
@@ -69,36 +99,29 @@ class PlaywrightRenderer:
                 pass
             logger.error("Live2D 加载失败 (%s): %s", status, e)
             return
-        logger.info("Live2D 模型加载完成")
-        await self._start_capture_stream()
-
-    async def _start_capture_stream(self) -> None:
-        if not self._page or self._closed or self._stream_started:
-            return
-        ok = await self._page.evaluate(
-            "(fps) => window.__avatar && window.__avatar.startCaptureStream(fps)",
-            max(1, self._cfg.fps),
+        self._canvas = self._page.locator(_CANVAS_SELECTOR)
+        await self._page.evaluate(_START_RENDER_LOOP_JS, max(1, self._cfg.fps))
+        logger.info(
+            "Live2D 模型已就绪 (%dx%d, 目标 %dfps)",
+            self._cfg.width,
+            self._cfg.height,
+            self._cfg.fps,
         )
-        if not ok:
-            logger.error("canvas.captureStream 启动失败，Avatar 视频不可用")
-            return
-        self._stream_started = True
-        logger.info("Avatar canvas.captureStream 已启动 (%dfps)", self._cfg.fps)
 
     async def apply_action(self, action: int | str) -> None:
         if not await self._page_ready():
             return
         try:
             if isinstance(action, str):
-                await self._page.evaluate(
-                    "(g) => window.__avatar?.applyAction({ motionGroup: g })",
-                    action,
-                )
+                spec = {"motionGroup": action}
             else:
-                await self._page.evaluate(
-                    "(i) => window.__avatar?.applyAction({ expressionIndex: i })",
-                    int(action),
-                )
+                spec = {"expressionIndex": int(action)}
+            await self._page.evaluate(
+                """(spec) => {
+                  requestAnimationFrame(() => window.__avatar?.applyAction?.(spec));
+                }""",
+                spec,
+            )
         except Exception:
             logger.debug("apply_action 失败", exc_info=True)
 
@@ -107,7 +130,9 @@ class PlaywrightRenderer:
             return
         try:
             await self._page.evaluate(
-                "(g) => window.__avatar?.startRandomMotion(g)",
+                """(g) => {
+                  requestAnimationFrame(() => window.__avatar?.startRandomMotion?.(g));
+                }""",
                 group,
             )
         except Exception:
@@ -125,37 +150,26 @@ class PlaywrightRenderer:
         except Exception:
             logger.debug("set_mouth 失败", exc_info=True)
 
-    async def _capture_rgb_js(self) -> dict | None:
-        if not await self._page_ready():
-            return None
-        if not self._stream_started:
-            await self._start_capture_stream()
-        if not self._stream_started:
-            return None
-        try:
-            return await self._page.evaluate(
-                "() => window.__avatar && window.__avatar.captureFrameRgb()"
-            )
-        except Exception:
-            logger.debug("captureFrameRgb 失败", exc_info=True)
-            return None
-
-    @staticmethod
-    def _parse_rgb(frame: dict | None) -> tuple[bytes, int, int] | None:
-        if not frame or not frame.get("b64"):
-            return None
-        try:
-            rgb = base64.b64decode(frame["b64"])
-            w = int(frame["width"])
-            h = int(frame["height"])
-            if w <= 0 or h <= 0 or len(rgb) != w * h * 3:
-                return None
-            return rgb, w, h
-        except (KeyError, TypeError, ValueError):
-            return None
-
     async def capture_rgb(self) -> tuple[bytes, int, int] | None:
-        return self._parse_rgb(await self._capture_rgb_js())
+        """JPEG 截 canvas（rAF 已在页内按 fps 刷新，此处不再 tick）。"""
+        if not await self._page_ready() or not self._canvas:
+            return None
+        try:
+            if await self._canvas.count() == 0:
+                return None
+            jpeg = await self._canvas.screenshot(
+                type="jpeg",
+                quality=_JPEG_QUALITY,
+                animations="disabled",
+            )
+            img = Image.open(BytesIO(jpeg)).convert("RGB")
+            w, h = img.size
+            if w <= 0 or h <= 0:
+                return None
+            return img.tobytes(), w, h
+        except Exception:
+            logger.debug("capture_rgb 失败", exc_info=True)
+            return None
 
     async def close(self) -> None:
         if self._closed:
@@ -163,10 +177,7 @@ class PlaywrightRenderer:
         self._closed = True
         if self._page:
             try:
-                if self._stream_started:
-                    await self._page.evaluate(
-                        "() => window.__avatar && window.__avatar.stopCaptureStream()"
-                    )
+                await self._page.evaluate(_STOP_RENDER_LOOP_JS)
             except Exception:
                 pass
             try:
@@ -174,4 +185,4 @@ class PlaywrightRenderer:
             except Exception:
                 logger.debug("关闭 avatar page 失败", exc_info=True)
             self._page = None
-        self._stream_started = False
+            self._canvas = None

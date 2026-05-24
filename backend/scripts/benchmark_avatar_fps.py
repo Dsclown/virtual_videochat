@@ -1,4 +1,4 @@
-"""测量 Avatar 实际抓帧帧率（canvas.captureStream → RGB）。
+"""测量 Avatar 实际抓帧帧率（页内 rAF 渲染 + JPEG 截 canvas → RGB）。
 
 用法（需本机 uvicorn 已启动，与线上一致）:
   cd backend && .venv/bin/python scripts/benchmark_avatar_fps.py
@@ -30,7 +30,7 @@ async def main() -> None:
     cfg = load_config()
     print(
         f"配置: {cfg.avatar.width}x{cfg.avatar.height} fps目标={cfg.avatar.fps} "
-        f"captureStream"
+        f"canvas截图"
     )
 
     mgr = PlaywrightManager(cfg.avatar)

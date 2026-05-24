@@ -200,12 +200,16 @@ export function mountAvatarBridge(): void {
       expressionIndex?: number;
       motionGroup?: string;
     }): boolean {
-      delegate.tick();
-      return delegate.applyAction(spec);
+      requestAnimationFrame(() => {
+        delegate.applyAction(spec);
+      });
+      return true;
     },
     startRandomMotion(group: string): boolean {
-      delegate.tick();
-      return delegate.startRandomMotion(group);
+      requestAnimationFrame(() => {
+        delegate.startRandomMotion(group);
+      });
+      return true;
     },
     renderTick(): void {
       delegate.tick();

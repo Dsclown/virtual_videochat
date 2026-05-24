@@ -20,6 +20,8 @@
       <button type="submit" class="btn primary">进入对话</button>
     </form>
   </div>
+  <script src="/gateway-config.js"></script>
+  <script src="/gateway-client.js"></script>
   <script>
     const form = document.getElementById("loginForm");
     const errEl = document.getElementById("loginError");
@@ -28,7 +30,7 @@
       const userId = document.getElementById("userId").value.trim();
       errEl.hidden = true;
       try {
-        const res = await fetch("/api/login", {
+        const res = await fetch(`${window.vvcGatewayOrigin()}/api/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ user_id: userId }),

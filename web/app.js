@@ -11,12 +11,27 @@ const avatarStatus = document.getElementById("avatarStatus");
 const avatarFpsEl = document.getElementById("avatarFps");
 let avatarCanvasCtx = avatarCanvas ? avatarCanvas.getContext("2d") : null;
 let avatarFpsMonitorActive = false;
-let avatarFpsStatsTimer = null;
-let avatarFpsLastDecoded = 0;
-let avatarFpsLastStatsAt = 0;
+let avatarFpsRvfcHandle = null;
+let avatarFpsFrameCount = 0;
+let avatarFpsWindowStart = 0;
+let avatarFpsLastMediaTime = -1;
 
 function setAvatarStatus(text) {
   if (avatarStatus) avatarStatus.textContent = text;
+}
+
+/** 启用 Avatar 时需等 WebRTC 画面就绪后才可开始聆听 */
+function updateListenButtonState() {
+  if (!btnToggleListen) return;
+  const needVideo = avatarEnabled;
+  const videoReady = !needVideo || avatarStreamConnected;
+  btnToggleListen.disabled = !authed || !videoReady;
+  if (!authed || listeningActive) return;
+  if (needVideo && !videoReady) {
+    statusText.textContent = "已连接，等待视频流…";
+  } else if (videoReady) {
+    statusText.textContent = needVideo ? "视频已连接，可开始聆听" : "已连接，可开始聆听";
+  }
 }
 
 /** aiortc 有时不触发 ontrack，从 receivers 绑定 MediaStream */
@@ -26,11 +41,15 @@ function attachAvatarWebRTCStream(pc) {
   if (!tracks.length) return false;
 
   const stream = new MediaStream(tracks);
+  stream.getAudioTracks().forEach((t) => {
+    t.enabled = true;
+  });
   avatarVideo.srcObject = stream;
   avatarVideo.hidden = false;
   if (avatarCanvas) avatarCanvas.hidden = true;
   avatarStreamConnected = true;
   setAvatarStatus("Live2D 视频流已连接 (WebRTC)");
+  updateListenButtonState();
   startAvatarWebRTCPump();
   startAvatarFpsMonitor();
   resumeAvatarWebRTCPlayback();
@@ -39,10 +58,15 @@ function attachAvatarWebRTCStream(pc) {
 
 function resumeAvatarWebRTCPlayback() {
   if (!avatarVideo || !avatarVideo.srcObject) return;
+  const audioTracks = avatarVideo.srcObject.getAudioTracks?.() || [];
+  if (!audioTracks.length) {
+    setAvatarStatus("WebRTC: 等待音频轨…");
+    return;
+  }
   avatarVideo.muted = false;
+  avatarVideo.volume = 1;
   avatarVideo.play().catch(() => {
-    avatarVideo.muted = true;
-    avatarVideo.play().catch(() => {});
+    setAvatarStatus("WebRTC: 点击「开始聆听」以启用声音");
   });
 }
 
@@ -66,65 +90,52 @@ function setAvatarFpsDisplay(fps) {
     return;
   }
   avatarFpsEl.hidden = false;
-  avatarFpsEl.textContent = `解码 ${fps.toFixed(1)} fps`;
+  avatarFpsEl.textContent = `画面 ${fps.toFixed(1)} fps`;
 }
 
 function stopAvatarFpsMonitor() {
   avatarFpsMonitorActive = false;
-  if (avatarFpsStatsTimer != null) {
-    clearTimeout(avatarFpsStatsTimer);
-    avatarFpsStatsTimer = null;
-  }
-  avatarFpsLastDecoded = -1;
-  avatarFpsLastStatsAt = 0;
-  if (avatarFpsEl) avatarFpsEl.hidden = true;
-}
-
-/** WebRTC 解码帧率（framesDecoded 差分；不用 RVFC，低帧率流上易虚高到 ~60） */
-function startAvatarFpsMonitor() {
-  if (avatarFpsMonitorActive || !avatarVideo) return;
-  avatarFpsMonitorActive = true;
-  avatarFpsLastDecoded = -1;
-  avatarFpsLastStatsAt = 0;
-
-  const pollStats = async () => {
-    if (!avatarFpsMonitorActive) return;
-    if (!avatarPc) {
-      avatarFpsStatsTimer = window.setTimeout(pollStats, 500);
-      return;
-    }
-    const receiver = avatarPc
-      .getReceivers()
-      .find((r) => r.track && r.track.kind === "video");
-    if (!receiver) {
-      avatarFpsStatsTimer = window.setTimeout(pollStats, 500);
-      return;
-    }
+  if (avatarVideo && avatarFpsRvfcHandle != null && avatarVideo.cancelVideoFrameCallback) {
     try {
-      const stats = await receiver.getStats();
-      let inbound = null;
-      stats.forEach((report) => {
-        if (report.type !== "inbound-rtp" || report.kind !== "video") return;
-        const decoded = report.framesDecoded ?? 0;
-        if (!inbound || decoded > (inbound.framesDecoded ?? 0)) inbound = report;
-      });
-      if (inbound && typeof inbound.framesDecoded === "number") {
-        const decoded = inbound.framesDecoded;
-        const now = performance.now();
-        if (avatarFpsLastDecoded >= 0 && avatarFpsLastStatsAt > 0) {
-          const dt = (now - avatarFpsLastStatsAt) / 1000;
-          const df = decoded - avatarFpsLastDecoded;
-          if (dt >= 0.4 && df >= 0) setAvatarFpsDisplay(df / dt);
-        }
-        avatarFpsLastDecoded = decoded;
-        avatarFpsLastStatsAt = now;
-      }
+      avatarVideo.cancelVideoFrameCallback(avatarFpsRvfcHandle);
     } catch {
       /* ignore */
     }
-    avatarFpsStatsTimer = window.setTimeout(pollStats, 500);
+  }
+  avatarFpsRvfcHandle = null;
+  avatarFpsFrameCount = 0;
+  avatarFpsWindowStart = 0;
+  avatarFpsLastMediaTime = -1;
+  if (avatarFpsEl) avatarFpsEl.hidden = true;
+}
+
+/** 画面更新帧率：RVFC + mediaTime 去重（避免重复解码帧与显示器刷新虚高） */
+function startAvatarFpsMonitor() {
+  if (avatarFpsMonitorActive || !avatarVideo) return;
+  if (typeof avatarVideo.requestVideoFrameCallback !== "function") return;
+  avatarFpsMonitorActive = true;
+  avatarFpsFrameCount = 0;
+  avatarFpsWindowStart = 0;
+  avatarFpsLastMediaTime = -1;
+
+  const onVideoFrame = (_now, metadata) => {
+    if (!avatarFpsMonitorActive) return;
+    const mt = metadata?.mediaTime;
+    if (typeof mt === "number" && mt !== avatarFpsLastMediaTime) {
+      avatarFpsLastMediaTime = mt;
+      const t = performance.now();
+      if (!avatarFpsWindowStart) avatarFpsWindowStart = t;
+      avatarFpsFrameCount += 1;
+      const dt = (t - avatarFpsWindowStart) / 1000;
+      if (dt >= 0.5) {
+        setAvatarFpsDisplay(avatarFpsFrameCount / dt);
+        avatarFpsFrameCount = 0;
+        avatarFpsWindowStart = t;
+      }
+    }
+    avatarFpsRvfcHandle = avatarVideo.requestVideoFrameCallback(onVideoFrame);
   };
-  pollStats();
+  avatarFpsRvfcHandle = avatarVideo.requestVideoFrameCallback(onVideoFrame);
 }
 
 /** WebRTC 解码后画到 canvas（video 保留用于出声） */
@@ -160,6 +171,7 @@ function startAvatarWebRTCPump() {
 function closeAvatarStreams() {
   stopAvatarWebRTCPump();
   avatarStreamConnected = false;
+  updateListenButtonState();
   if (avatarVideo) {
     avatarVideo.pause();
     avatarVideo.srcObject = null;
@@ -211,7 +223,9 @@ async function startAvatarWebRTC() {
   }
   avatarPc = new RTCPeerConnection(rtcConfig);
   avatarPc.ontrack = () => {
-    attachAvatarWebRTCStream(avatarPc);
+    if (attachAvatarWebRTCStream(avatarPc)) {
+      resumeAvatarWebRTCPlayback();
+    }
   };
   avatarPc.onicecandidate = (ev) => {
     if (ev.candidate) {
@@ -224,9 +238,11 @@ async function startAvatarWebRTC() {
       scheduleAttachAvatarWebRTCStream(avatarPc);
     } else if (st === "failed") {
       avatarStreamConnected = false;
+      updateListenButtonState();
       setAvatarStatus("WebRTC 连接失败");
     } else if (st === "closed" || st === "disconnected") {
       avatarStreamConnected = false;
+      updateListenButtonState();
       setAvatarStatus(`视频流 ${st || "断开"}`);
     }
   };
@@ -241,19 +257,13 @@ async function startAvatarWebRTC() {
   });
 }
 
-const STAGE_LABELS = {
-  listening: "聆听中 — 请直接说话",
-  thinking: "思考中 — 正在生成回复",
-  speaking: "回应中 — 正在播放语音",
-};
-
 const TARGET_SR = 16000;
 const userId = localStorage.getItem("vv_user_id");
 if (!userId) {
   location.href = "/login.html";
 }
 
-const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+const wsUrl = window.vvcGatewayWsUrl();
 let ws = null;
 let authed = false;
 let listeningActive = false;
@@ -272,7 +282,6 @@ let activePlayId = 0;
 /** 当前正在播放的 blob URL（stop 时需单独 revoke） */
 let currentPlayUrl = null;
 const ttsPlayer = document.getElementById("ttsPlayer");
-let currentStage = "listening";
 /** 与服务端 turn_id 对齐，丢弃已打断回合的迟到 utterance */
 let serverTurnId = 0;
 /** 当前轮助手回复气泡（按句追加，与 TTS 同步） */
@@ -283,31 +292,10 @@ const micBadge = document.getElementById("micBadge");
 const liveText = document.getElementById("liveText");
 const chatLog = document.getElementById("chatLog");
 const btnToggleListen = document.getElementById("btnToggleListen");
-const btnInterrupt = document.getElementById("btnInterrupt");
 const btnReset = document.getElementById("btnReset");
 const userBadge = document.getElementById("userBadge");
-const pfProfile = document.getElementById("pfProfile");
-const pfTopic = document.getElementById("pfTopic");
-const pfInterests = document.getElementById("pfInterests");
 
 userBadge.textContent = `用户: ${userId}`;
-
-function setProfileForm(form) {
-  if (!form) return;
-  pfProfile.textContent = form.user_profile || "—";
-  pfTopic.textContent = form.current_topic || "—";
-  const list = form.historical_interests || [];
-  pfInterests.textContent = list.length ? list.map((x) => `• ${x}`).join("\n") : "—";
-}
-
-function setStage(stage) {
-  currentStage = stage;
-  document.querySelectorAll(".stage-indicator").forEach((el) => {
-    el.classList.toggle("active", el.dataset.stage === stage);
-  });
-  statusText.textContent = STAGE_LABELS[stage] || stage;
-  btnInterrupt.disabled = stage !== "speaking" && stage !== "thinking";
-}
 
 function appendMsg(role, text) {
   const el = document.createElement("div");
@@ -370,11 +358,13 @@ function stopMicTracks() {
 
 function pauseListening() {
   listenPaused = true;
+  sendJson({ type: "mic_state", enabled: false });
   liveText.textContent = "已暂停发送麦克风";
 }
 
 function resumeListening() {
   listenPaused = false;
+  sendJson({ type: "mic_state", enabled: true });
   if (!audioStream) {
     startListening().catch((e) => appendMsg("system", `麦克风错误: ${e.message}`));
   } else {
@@ -403,9 +393,7 @@ function handleServerMessage(msg) {
         avatarIceServers = msg.ice_servers;
       }
       avatarIceTransportPolicy = msg.ice_transport_policy || "all";
-      setStage(msg.stage || "listening");
-      setProfileForm(msg.profile_form);
-      btnToggleListen.disabled = false;
+      updateListenButtonState();
       appendMsg(
         "system",
         `已登录 ${msg.user_id}${vadEnabled ? "（Silero VAD）" : "（VAD 未启用）"}`
@@ -432,16 +420,6 @@ function handleServerMessage(msg) {
       if (!avatarPc || !msg.candidate) break;
       avatarPc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
       break;
-    case "stage":
-      // 仅更新指示器；勿在 speaking→listening 时 stopPlayback（服务端会先 turn_done，
-      // 此时队列里可能还有未播完的句，误清会导致「只播第一句」）
-      setStage(msg.stage);
-      break;
-    case "stop_audio":
-      syncTurnId(msg);
-      stopPlayback();
-      assistantTurnEl = null;
-      break;
     case "vad":
       if (msg.event === "speech_start") {
         liveText.textContent = "检测到说话…";
@@ -456,19 +434,11 @@ function handleServerMessage(msg) {
         liveText.textContent = "已忽略背景音";
       }
       break;
-    case "control":
-      if (msg.text === "interrupt") {
-        stopPlayback();
-        assistantTurnEl = null;
-        liveText.textContent = "语音打断";
-      }
-      break;
     case "user_text":
       syncTurnId(msg);
       assistantTurnEl = null;
       appendMsg("user", msg.text);
       liveText.textContent = msg.text;
-      setStage("thinking");
       break;
     case "assistant_utterance":
       if (!acceptTurnMsg(msg)) break;
@@ -490,16 +460,19 @@ function handleServerMessage(msg) {
       if (!acceptTurnMsg(msg)) break;
       syncTurnId(msg);
       assistantTurnEl = null;
-      if (msg.profile_form) setProfileForm(msg.profile_form);
+      break;
+    case "turn_cancelled":
+      syncTurnId(msg);
+      stopPlayback();
+      assistantTurnEl = null;
+      liveText.textContent = "已打断 AI，请继续说话";
       break;
     case "turn_done":
       syncTurnId(msg);
       finishTurnAndResumeListen();
       break;
-    case "interrupted":
     case "reset_ok":
       syncTurnId(msg);
-      setStage("listening");
       stopPlayback();
       assistantTurnEl = null;
       if (listeningActive && !listenPaused && authed) resumeListening();
@@ -509,7 +482,6 @@ function handleServerMessage(msg) {
       if (msg.message && String(msg.message).includes("Avatar")) {
         setAvatarStatus(`Avatar: ${msg.message}`);
       }
-      setStage("listening");
       stopPlayback();
       if (listeningActive && !listenPaused && authed) resumeListening();
       break;
@@ -621,7 +593,6 @@ function playNext() {
 function finishTurnAndResumeListen() {
   const wait = () => {
     if (!isPlaying && audioQueue.length === 0) {
-      setStage("listening");
       if (listeningActive && !listenPaused && authed) resumeListening();
     } else {
       setTimeout(wait, 150);
@@ -641,7 +612,7 @@ function connect() {
     listenPaused = false;
     closeAvatarStreams();
     stopMicTracks();
-    btnToggleListen.disabled = true;
+    updateListenButtonState();
     statusText.textContent = "连接已断开";
   };
   ws.onmessage = (e) => {
@@ -650,12 +621,13 @@ function connect() {
 }
 
 btnToggleListen.addEventListener("click", async () => {
-  if (!authed) return;
+  if (!authed || btnToggleListen.disabled) return;
   resumeAvatarWebRTCPlayback();
   if (!listeningActive) {
     listeningActive = true;
     listenPaused = false;
     btnToggleListen.textContent = "暂停聆听";
+    sendJson({ type: "mic_state", enabled: true });
     await startListening();
     return;
   }
@@ -670,18 +642,9 @@ btnToggleListen.addEventListener("click", async () => {
   }
 });
 
-btnInterrupt.addEventListener("click", () => {
-  stopPlayback();
-  sendJson({ type: "interrupt" });
-});
 btnReset.addEventListener("click", () => {
   chatLog.innerHTML = "";
   assistantTurnEl = null;
   sendJson({ type: "reset" });
 });
-document.getElementById("btnLogout").addEventListener("click", () => {
-  localStorage.removeItem("vv_user_id");
-  location.href = "/login.html";
-});
-
 connect();
