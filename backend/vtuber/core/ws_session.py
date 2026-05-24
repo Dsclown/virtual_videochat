@@ -201,8 +201,6 @@ class VoiceChatSession:
                 self._enqueue_audio(data)
                 return
             await self._handle_text(data)
-        elif "bytes" in raw and raw["bytes"]:
-            await self._handle_bytes(raw["bytes"])
 
     async def _handle_text(self, data: dict) -> None:
         t = data.get("type")
@@ -278,6 +276,7 @@ class VoiceChatSession:
                 self._avatar = AvatarStreamSession(
                     self._ctx.playwright,
                     self._ctx.config.avatar,
+                    live2d_model=self._ctx.live2d_model,
                     send_ice=self.send,
                 )
             answer_sdp = await self._avatar.create_answer(sdp)
@@ -335,14 +334,3 @@ class VoiceChatSession:
             await orch.run_turn_text(text)
 
         self._start_turn(_text)
-
-    async def _handle_bytes(self, audio_bytes: bytes) -> None:
-        if not self._user_id:
-            await self.send({"type": "error", "message": "请先登录"})
-            return
-        logger.info("收到二进制音频 %d bytes（兼容路径）", len(audio_bytes))
-
-        async def _audio(orch: ConversationOrchestrator) -> None:
-            await orch.run_turn_audio(audio_bytes)
-
-        self._start_turn(_audio)

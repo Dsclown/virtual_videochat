@@ -102,7 +102,7 @@ def build_form_update_instruction(cfg: ProfileConfig) -> str:
     return f"""
 每轮回复末尾单独一行输出 JSON（无 markdown），用于更新用户上下文表单；不需要更新时 form_update 为 null。
 格式：
-{{"form_update":{{"user_profile":"...","current_topic":"...","historical_interests":["..."]}},"emotion":"neutral","gesture":"none","scene":"default"}}
+{{"form_update":{{"user_profile":"...","current_topic":"...","historical_interests":["..."]}}}}
 
 【重要】表单字段是给人看的「摘要」，不是标签或小标题：
 - user_profile：2～4 句连贯摘要（约 {cfg.profile_summary_min_chars}～{cfg.profile_summary_max_chars} 字），概括对方是谁、长期偏好、沟通风格、已知重要事实；禁止只写「喜欢游戏」「上班族」这类短语。
@@ -116,16 +116,11 @@ def build_form_update_instruction(cfg: ProfileConfig) -> str:
 """.strip()
 
 
-# 兼容旧引用
-FORM_UPDATE_INSTRUCTION = build_form_update_instruction(ProfileConfig())
-
-
-def parse_reply_with_form_and_avatar(full_text: str) -> tuple[str, dict | None, dict | None]:
-    """分离口语回复、form_update、avatar 字段。"""
+def parse_reply_with_form(full_text: str) -> tuple[str, dict | None]:
+    """分离口语回复与 form_update JSON。"""
     lines = full_text.strip().splitlines()
     reply_lines: list[str] = []
     form_update = None
-    avatar = None
 
     for line in lines:
         s = line.strip()
@@ -135,16 +130,10 @@ def parse_reply_with_form_and_avatar(full_text: str) -> tuple[str, dict | None, 
                 if "form_update" in data:
                     fu = data.get("form_update")
                     form_update = fu if isinstance(fu, dict) else None
-                if any(k in data for k in ("emotion", "gesture", "scene")):
-                    avatar = {
-                        "emotion": data.get("emotion", "neutral"),
-                        "gesture": data.get("gesture", "none"),
-                        "scene": data.get("scene", "default"),
-                    }
             except json.JSONDecodeError:
                 reply_lines.append(line)
         else:
             reply_lines.append(line)
 
     reply = "\n".join(reply_lines).strip() or full_text.strip()
-    return reply, form_update, avatar
+    return reply, form_update

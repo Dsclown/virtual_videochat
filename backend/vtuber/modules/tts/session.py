@@ -22,12 +22,10 @@ class TtsSession:
         tts: TTSModule,
         *,
         avatar: AvatarStreamSession | None = None,
-        suppress_ws_audio: bool = False,
     ):
         self._send = send
         self._tts = tts
         self._avatar = avatar
-        self._suppress_ws_audio = suppress_ws_audio
         self._tasks: set[asyncio.Task] = set()
         self._payload_queue: asyncio.Queue[tuple[dict, int, bytes | None] | None] = asyncio.Queue()
         self._sender_task: asyncio.Task | None = None
@@ -55,7 +53,12 @@ class TtsSession:
         """标记本轮非正常结束（编排层打断/提前退出）。"""
         self._abort = True
 
-    async def speak(self, text: str) -> int:
+    async def speak(
+        self,
+        text: str,
+        *,
+        live2d_actions: list[int | str] | None = None,
+    ) -> int:
         if self._shutdown:
             return -1
         text = text.strip()
@@ -68,23 +71,41 @@ class TtsSession:
         if not self._sender_task or self._sender_task.done():
             self._sender_task = asyncio.create_task(self._sender_loop())
 
-        task = asyncio.create_task(self._synthesize_and_queue(text, seq))
+        task = asyncio.create_task(
+            self._synthesize_and_queue(text, seq, live2d_actions=live2d_actions)
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return seq
 
-    def _build_payload(self, text: str, seq: int, audio: bytes | None) -> dict:
-        return {
+    def _build_payload(
+        self,
+        text: str,
+        seq: int,
+        audio: bytes | None,
+        *,
+        live2d_actions: list[int | str] | None = None,
+    ) -> dict:
+        payload = {
             "type": "assistant_utterance",
             "text": text,
             "index": seq,
             "format": "mp3",
-            "data": None if (self._suppress_ws_audio and self._avatar) else (
-                base64.b64encode(audio).decode("ascii") if audio else None
-            ),
+            "data": None
+            if self._avatar
+            else (base64.b64encode(audio).decode("ascii") if audio else None),
         }
+        if live2d_actions:
+            payload["live2d_actions"] = live2d_actions
+        return payload
 
-    async def _synthesize_and_queue(self, text: str, seq: int) -> None:
+    async def _synthesize_and_queue(
+        self,
+        text: str,
+        seq: int,
+        *,
+        live2d_actions: list[int | str] | None = None,
+    ) -> None:
         if self._shutdown:
             return
         audio: bytes | None = None
@@ -94,7 +115,9 @@ class TtsSession:
             logger.warning("TTS 合成超时: %r", text[:40])
         except asyncio.CancelledError:
             if not self._shutdown:
-                await self._payload_queue.put((self._build_payload(text, seq, None), seq, None))
+                await self._payload_queue.put(
+                    (self._build_payload(text, seq, None, live2d_actions=live2d_actions), seq, None)
+                )
             raise
         except Exception:
             logger.exception("TTS 合成失败: %r", text[:40])
@@ -103,12 +126,24 @@ class TtsSession:
             return
 
         # 失败/超时也占位入队，避免 sender 卡在某个 seq 导致后续句永不播放（对齐 OLV silent payload）
-        await self._payload_queue.put((self._build_payload(text, seq, audio), seq, audio))
+        await self._payload_queue.put(
+            (
+                self._build_payload(text, seq, audio, live2d_actions=live2d_actions),
+                seq,
+                audio,
+            )
+        )
 
-    async def _feed_avatar_in_order(self, mp3: bytes | None) -> None:
+    async def _feed_avatar_in_order(
+        self, mp3: bytes | None, payload: dict
+    ) -> None:
         if not mp3 or not self._avatar:
             return
         try:
+            actions = payload.get("live2d_actions")
+            if actions:
+                await self._avatar.apply_llm_actions(actions)
+            await self._avatar.start_talk_motion()
             await self._avatar.feed_utterance(mp3)
         except Exception:
             logger.exception("Avatar feed_utterance 失败")
@@ -122,7 +157,7 @@ class TtsSession:
                     if item is None:
                         while self._next_to_send in buffered and not self._shutdown:
                             out_payload, out_mp3 = buffered.pop(self._next_to_send)
-                            await self._feed_avatar_in_order(out_mp3)
+                            await self._feed_avatar_in_order(out_mp3, out_payload)
                             await self._send(out_payload)
                             self._next_to_send += 1
                         return
@@ -132,7 +167,7 @@ class TtsSession:
                     buffered[seq] = (payload, mp3)
                     while self._next_to_send in buffered and not self._shutdown:
                         out_payload, out_mp3 = buffered.pop(self._next_to_send)
-                        await self._feed_avatar_in_order(out_mp3)
+                        await self._feed_avatar_in_order(out_mp3, out_payload)
                         await self._send(out_payload)
                         self._next_to_send += 1
                 finally:

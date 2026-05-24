@@ -10,6 +10,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from vtuber.config.loader import AvatarConfig
 from vtuber.modules.avatar.lipsync import mp3_to_pcm48k, pcm_rms_envelope
 from vtuber.modules.avatar.playwright_manager import PlaywrightManager
+from vtuber.modules.avatar.live2d_model import Live2dModel
 from vtuber.modules.avatar.playwright_renderer import PlaywrightRenderer
 from vtuber.modules.avatar.webrtc_tracks import AvatarAudioTrack, AvatarVideoTrack, _black_rgb
 from vtuber.modules.avatar.webrtc_utils import (
@@ -44,10 +45,12 @@ class AvatarStreamSession:
         manager: PlaywrightManager,
         cfg: AvatarConfig,
         *,
+        live2d_model: Live2dModel | None = None,
         send_ice: IceSendFn | None = None,
     ):
         self._manager = manager
         self._cfg = cfg
+        self._live2d = live2d_model
         self._send_ice = send_ice
         self._renderer = PlaywrightRenderer(manager, cfg)
         self._pc: RTCPeerConnection | None = None
@@ -161,6 +164,19 @@ class AvatarStreamSession:
             await asyncio.sleep(0.05)
         logger.warning("Avatar PCM 播放 drain 超时 (%.0fs)", timeout)
 
+    async def apply_llm_actions(self, actions: list[int | str]) -> None:
+        if not actions:
+            return
+        await self._renderer.apply_action(actions[-1])
+
+    async def start_talk_motion(self) -> None:
+        group = self._live2d.talk_motion_group if self._live2d else "Tap"
+        await self._renderer.start_random_motion(group)
+
+    async def reset_to_idle_motion(self) -> None:
+        group = self._live2d.idle_motion_group if self._live2d else "Idle"
+        await self._renderer.start_random_motion(group)
+
     async def interrupt(self) -> None:
         async with self._playback_lock:
             self._playback.generation += 1
@@ -170,6 +186,7 @@ class AvatarStreamSession:
             self._audio_buffer.clear()
         self._mouth = 0.0
         await self._renderer.set_mouth(0.0)
+        await self.reset_to_idle_motion()
 
     async def next_video_frame(self, *, force_idle: bool = False) -> tuple[bytes, int, int] | None:
         async with self._frame_lock:

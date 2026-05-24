@@ -3,8 +3,8 @@
 system:
   host: "0.0.0.0"
   port: 8765
-  vad_executor_workers: 4
-  io_executor_workers: 4
+  vad_executor_workers: 1   # Silero VAD 线程池；多人时再调高
+  io_executor_workers: 1
 
 character:
   name: "助手"
@@ -23,7 +23,7 @@ asr:
   model_dir: "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
   num_threads: 2
   provider_device: cpu
-  pool_size: 4
+  pool_size: 1   # 同时 ASR 路数（与 WebRTC/Live2D 并发无关）
 
 tts:
   provider: edge
@@ -45,15 +45,17 @@ avatar:
   provider: playwright
   enabled: true
   render_engine: cubism-sdk-live2d
-  model_name: shizuku
+  model_name: mao_pro
   models_root: assets/live2d/models
   server_base_url: "http://127.0.0.1:8765"
+  view_scale: 0.9
   width: 360
   height: 360
   fps: 10
   webrtc_enabled: true
-  suppress_ws_audio: true          # WebRTC 出声时不再走 WS MP3
   ice_transport_policy: relay      # 跨网/SSH 建议 relay
+  model_dict_path: assets/live2d/model_dict.json
+  live2d_expressions_enabled: true   # LLM [joy] 等 → Live2D 表情/动作
   ice_servers:
     - urls: "stun:stun.l.google.com:19302"
     - urls: "turn:YOUR_TURN_HOST:3478"

@@ -1,4 +1,5 @@
 import { CubismFramework, Option } from '@framework/live2dcubismframework';
+import { InvalidMotionQueueEntryHandleValue } from '@framework/motion/cubismmotionqueuemanager';
 import { CubismLogError } from '@framework/utils/cubismdebug';
 
 import * as LAppDefine from './lappdefine';
@@ -35,6 +36,35 @@ export class AvatarDelegate {
 
   public setMouth(value: number): void {
     this._subdelegate?.getLive2DManager()?.getModel()?.setMouthOpenY(value);
+  }
+
+  /** LLM / 服务端驱动：表情索引（有 Expressions 的模型）或动作组名 */
+  public applyAction(spec: {
+    expressionIndex?: number;
+    motionGroup?: string;
+  }): boolean {
+    const model = this._subdelegate?.getLive2DManager()?.getModel();
+    if (!model) {
+      return false;
+    }
+    if (spec.motionGroup) {
+      model.startRandomMotion(spec.motionGroup, LAppDefine.PriorityNormal);
+      return true;
+    }
+    if (spec.expressionIndex != null) {
+      model.setExpressionByIndex(spec.expressionIndex);
+      return true;
+    }
+    return false;
+  }
+
+  public startRandomMotion(group: string): boolean {
+    const model = this._subdelegate?.getLive2DManager()?.getModel();
+    if (!model) {
+      return false;
+    }
+    const handle = model.startRandomMotion(group, LAppDefine.PriorityNormal);
+    return handle !== InvalidMotionQueueEntryHandleValue;
   }
 
   public tick(): void {
@@ -141,6 +171,11 @@ declare global {
     __avatar?: {
       isReady(): boolean;
       setMouth(value: number): void;
+      applyAction(spec: {
+        expressionIndex?: number;
+        motionGroup?: string;
+      }): boolean;
+      startRandomMotion(group: string): boolean;
       renderTick(): void;
       startCaptureStream(fps: number): boolean;
       stopCaptureStream(): void;
@@ -160,6 +195,17 @@ export function mountAvatarBridge(): void {
     },
     setMouth(value: number): void {
       delegate.setMouth(value);
+    },
+    applyAction(spec: {
+      expressionIndex?: number;
+      motionGroup?: string;
+    }): boolean {
+      delegate.tick();
+      return delegate.applyAction(spec);
+    },
+    startRandomMotion(group: string): boolean {
+      delegate.tick();
+      return delegate.startRandomMotion(group);
     },
     renderTick(): void {
       delegate.tick();

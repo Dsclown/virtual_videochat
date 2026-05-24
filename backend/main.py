@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 RENDER_ENGINE_DIR = PROJECT_ROOT / "render-engine"
 LIVE2D_LIBS_DIR = PROJECT_ROOT / "assets" / "live2d" / "libs"
-LIVE2D_PIXI_DIR = PROJECT_ROOT / "assets" / "live2d" / "pixi"
 
 app_config = load_config()
 service_ctx: ServiceContext | None = None
@@ -58,12 +57,6 @@ if _models_dir.is_dir():
         "/live2d-models",
         StaticFiles(directory=str(_models_dir)),
         name="live2d-models",
-    )
-if LIVE2D_PIXI_DIR.is_dir():
-    app.mount(
-        "/live2d/pixi",
-        StaticFiles(directory=str(LIVE2D_PIXI_DIR)),
-        name="live2d-pixi",
     )
 if LIVE2D_LIBS_DIR.is_dir():
     app.mount(

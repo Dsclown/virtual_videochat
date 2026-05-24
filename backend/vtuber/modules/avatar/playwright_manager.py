@@ -76,6 +76,8 @@ class PlaywrightManager:
             f"model={quote(model_url, safe='/:')}"
             f"&w={self._cfg.width}&h={self._cfg.height}"
         )
+        if self._cfg.view_scale and self._cfg.view_scale > 0:
+            q += f"&scale={self._cfg.view_scale}"
         engine = self._cfg.render_engine.strip("/")
         return (
             f"{self._cfg.server_base_url.rstrip('/')}"

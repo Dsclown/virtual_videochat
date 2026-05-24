@@ -782,6 +782,18 @@ export class LAppModel extends CubismUserModel {
     }
   }
 
+  /** model3.json Expressions 数组下标（对齐 OLV emotionMap 整数） */
+  public setExpressionByIndex(index: number): void {
+    if (!this._modelSetting || this._modelSetting.getExpressionCount() <= 0) {
+      return;
+    }
+    const i = Math.max(0, Math.min(index, this._modelSetting.getExpressionCount() - 1));
+    const name = this._modelSetting.getExpressionName(i);
+    if (name) {
+      this.setExpression(name);
+    }
+  }
+
   /**
    * ランダムに選ばれた表情モーションをセットする
    */

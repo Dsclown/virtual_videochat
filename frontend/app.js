@@ -7,7 +7,6 @@ let avatarIceTransportPolicy = "all";
 let avatarWebRTCPumpActive = false;
 const avatarVideo = document.getElementById("avatarVideo");
 const avatarCanvas = document.getElementById("avatarCanvas");
-const avatarFrame = document.getElementById("avatarFrame");
 const avatarStatus = document.getElementById("avatarStatus");
 const avatarFpsEl = document.getElementById("avatarFps");
 let avatarCanvasCtx = avatarCanvas ? avatarCanvas.getContext("2d") : null;
@@ -29,7 +28,6 @@ function attachAvatarWebRTCStream(pc) {
   const stream = new MediaStream(tracks);
   avatarVideo.srcObject = stream;
   avatarVideo.hidden = false;
-  if (avatarFrame) avatarFrame.hidden = true;
   if (avatarCanvas) avatarCanvas.hidden = true;
   avatarStreamConnected = true;
   setAvatarStatus("Live2D 视频流已连接 (WebRTC)");
@@ -141,7 +139,6 @@ function drawAvatarWebRTCFrame() {
   }
   avatarCanvasCtx.drawImage(avatarVideo, 0, 0, w, h);
   avatarCanvas.hidden = false;
-  if (avatarFrame) avatarFrame.hidden = true;
   avatarVideo.hidden = false;
   avatarVideo.style.opacity = "0";
   avatarVideo.style.pointerEvents = "none";
@@ -242,19 +239,6 @@ async function startAvatarWebRTC() {
     type: "webrtc_offer",
     sdp: avatarPc.localDescription.sdp,
   });
-}
-
-function closeAvatarWebRTC() {
-  stopAvatarWebRTCPump();
-  avatarStreamConnected = false;
-  if (avatarVideo) {
-    avatarVideo.pause();
-    avatarVideo.srcObject = null;
-  }
-  if (avatarPc) {
-    avatarPc.close();
-    avatarPc = null;
-  }
 }
 
 const STAGE_LABELS = {
@@ -426,10 +410,12 @@ function handleServerMessage(msg) {
         "system",
         `已登录 ${msg.user_id}${vadEnabled ? "（Silero VAD）" : "（VAD 未启用）"}`
       );
-      if (avatarEnabled && msg.avatar_webrtc) {
-        startAvatarVideo();
-      } else if (avatarEnabled) {
-        setAvatarStatus("Avatar 已启用（WebRTC 未开）");
+      if (avatarEnabled) {
+        if (msg.avatar_webrtc) {
+          startAvatarVideo();
+        } else {
+          setAvatarStatus("Avatar 需要 WebRTC（请检查 webrtc_enabled）");
+        }
       }
       break;
     case "webrtc_answer":
@@ -496,19 +482,14 @@ function handleServerMessage(msg) {
         chatLog.scrollTop = chatLog.scrollHeight;
         liveText.textContent = msg.text;
       }
-      if (msg.data) {
-        if (avatarStreamConnected) {
-          /* WebRTC 已出声 */
-        } else {
-          enqueueAudio(msg.data, msg.format || "mp3");
-        }
+      if (msg.data && !avatarEnabled) {
+        enqueueAudio(msg.data, msg.format || "mp3");
       }
       break;
     case "assistant_final":
       if (!acceptTurnMsg(msg)) break;
       syncTurnId(msg);
       assistantTurnEl = null;
-      if (msg.avatar) appendMsg("system", `[Live2D] ${JSON.stringify(msg.avatar)}`);
       if (msg.profile_form) setProfileForm(msg.profile_form);
       break;
     case "turn_done":
@@ -664,10 +645,6 @@ function connect() {
     statusText.textContent = "连接已断开";
   };
   ws.onmessage = (e) => {
-    if (typeof e.data !== "string") {
-      console.warn("收到非 JSON WS 二进制消息，已忽略");
-      return;
-    }
     handleServerMessage(JSON.parse(e.data));
   };
 }

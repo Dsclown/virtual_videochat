@@ -10,8 +10,9 @@ from vtuber.modules.avatar.stream_session import AvatarStreamSession
 from vtuber.modules.memory.factory import MemoryFactory
 from vtuber.modules.profile.form import (
     build_form_update_instruction,
-    parse_reply_with_form_and_avatar,
+    parse_reply_with_form,
 )
+from vtuber.modules.avatar.live2d_model import Live2dModel
 from vtuber.modules.tts.session import TtsSession
 from vtuber.utils.sentence_buffer import (
     drain_complete_sentences,
@@ -67,12 +68,6 @@ class ConversationOrchestrator:
             from_asr=True,
         )
 
-    async def run_turn_audio(self, audio_bytes: bytes) -> None:
-        await self._with_voice_turn(
-            lambda: self._ctx.asr.transcribe(audio_bytes),
-            from_asr=True,
-        )
-
     async def run_turn_text(self, user_text: str) -> None:
         self._cancel.clear()
         try:
@@ -119,7 +114,6 @@ class ConversationOrchestrator:
             self._send,
             self._ctx.tts,
             avatar=self._avatar,
-            suppress_ws_audio=self._ctx.config.avatar.suppress_ws_audio,
         ) as tts:
             self._tts = tts
             full_reply = await self._stream_llm(user_text, from_asr=from_asr, tts=tts)
@@ -127,7 +121,7 @@ class ConversationOrchestrator:
                 tts.abort()
                 return
 
-            reply_text, form_update, avatar_raw = parse_reply_with_form_and_avatar(full_reply)
+            reply_text, form_update = parse_reply_with_form(full_reply)
             await self._ctx.run_io(self._memory.append, "assistant", reply_text)
 
             updated = await self._ctx.run_io(
@@ -140,7 +134,6 @@ class ConversationOrchestrator:
                     "current_topic": updated.current_topic,
                     "historical_interests": updated.historical_interests,
                 },
-                "avatar": avatar_raw,
             })
 
             if self._stopped or not reply_text:
@@ -156,6 +149,7 @@ class ConversationOrchestrator:
 
         if self._avatar:
             await self._avatar.wait_playback_drained()
+            await self._avatar.reset_to_idle_motion()
 
         await self._send({"type": "turn_done"})
         await self._set_stage(Stage.LISTENING)
@@ -198,7 +192,7 @@ class ConversationOrchestrator:
         if self._stopped:
             return None
 
-        reply_text, _, _ = parse_reply_with_form_and_avatar(full_reply)
+        reply_text, _ = parse_reply_with_form(full_reply)
         speech_buffer, tts_offset, speaking = await self._sync_buffer(
             reply_text, speech_buffer, tts_offset, speaking, tts
         )
@@ -251,7 +245,14 @@ class ConversationOrchestrator:
         if not speaking:
             speaking = True
             await self._set_stage(Stage.SPEAKING)
-        await tts.speak(sentence)
+        speak_text = sentence
+        live2d_actions: list[int | str] | None = None
+        l2d = self._ctx.live2d_model
+        if l2d:
+            live2d_actions = l2d.extract_actions(sentence) or None
+            speak_text = l2d.remove_emotion_keywords(sentence)
+        if speak_text.strip():
+            await tts.speak(speak_text, live2d_actions=live2d_actions)
         return speaking
 
     def _build_messages(self, user_text: str, *, from_asr: bool) -> list[dict]:
@@ -262,6 +263,11 @@ class ConversationOrchestrator:
             f"{build_form_update_instruction(pcfg)}\n\n"
             f"--- 当前用户上下文表单 ---\n{form.to_prompt_block()}"
         )
+        l2d = self._ctx.live2d_model
+        if l2d:
+            expr_prompt = Live2dModel.load_expression_prompt(l2d.emo_str)
+            if expr_prompt:
+                system = f"{system}\n\n{expr_prompt}"
         user_content = f"{ASR_USER_PREFIX}用户说：{user_text}" if from_asr else user_text
         return [
             {"role": "system", "content": system},

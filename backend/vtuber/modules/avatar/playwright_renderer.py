@@ -85,6 +85,34 @@ class PlaywrightRenderer:
         self._stream_started = True
         logger.info("Avatar canvas.captureStream 已启动 (%dfps)", self._cfg.fps)
 
+    async def apply_action(self, action: int | str) -> None:
+        if not await self._page_ready():
+            return
+        try:
+            if isinstance(action, str):
+                await self._page.evaluate(
+                    "(g) => window.__avatar?.applyAction({ motionGroup: g })",
+                    action,
+                )
+            else:
+                await self._page.evaluate(
+                    "(i) => window.__avatar?.applyAction({ expressionIndex: i })",
+                    int(action),
+                )
+        except Exception:
+            logger.debug("apply_action 失败", exc_info=True)
+
+    async def start_random_motion(self, group: str) -> None:
+        if not await self._page_ready():
+            return
+        try:
+            await self._page.evaluate(
+                "(g) => window.__avatar?.startRandomMotion(g)",
+                group,
+            )
+        except Exception:
+            logger.debug("start_random_motion 失败", exc_info=True)
+
     async def set_mouth(self, value: float) -> None:
         if not await self._page_ready():
             return

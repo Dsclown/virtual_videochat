@@ -1,4 +1,4 @@
-from vtuber.config.loader import SileroVADConfig, VADConfig
+from vtuber.config.loader import VADConfig
 from vtuber.modules.vad.interface import VADInterface
 from vtuber.modules.vad.silero import SileroVADBackend, SileroVADConfig, VADEngine
 
@@ -28,11 +28,3 @@ class VADFactory:
             smoothing_window=s.smoothing_window,
         )
         return VADEngine(backend, vad_cfg)
-
-    @staticmethod
-    def create(cfg: VADConfig) -> VADInterface | None:
-        """兼容旧调用：单连接场景下 backend + session 一体创建。"""
-        backend = VADFactory.create_backend(cfg)
-        if backend is None:
-            return None
-        return VADFactory.create_session(cfg, backend)

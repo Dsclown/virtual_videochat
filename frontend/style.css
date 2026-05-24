@@ -52,8 +52,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; }
 }
 
 #avatarVideo,
-#avatarCanvas,
-#avatarFrame {
+#avatarCanvas {
   position: absolute;
   inset: 0;
   width: 100%;

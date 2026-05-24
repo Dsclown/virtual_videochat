@@ -1,0 +1,32 @@
+[
+  {
+    "name": "mao_pro",
+    "idleMotionGroupName": "Idle",
+    "talkMotionGroupName": "",
+    "emotionMap": {
+      "neutral": 0,
+      "anger": 2,
+      "disgust": 2,
+      "fear": 1,
+      "joy": 3,
+      "smirk": 3,
+      "sadness": 1,
+      "surprise": 3
+    }
+  },
+  {
+    "name": "shizuku",
+    "idleMotionGroupName": "Idle",
+    "talkMotionGroupName": "Tap",
+    "emotionMap": {
+      "neutral": "Idle",
+      "joy": "Tap",
+      "smirk": "Tap",
+      "surprise": "FlickUp",
+      "anger": "Flick3",
+      "disgust": "Flick3",
+      "fear": "Idle",
+      "sadness": "Idle"
+    }
+  }
+]

@@ -10,7 +10,7 @@ _WEAK_SPLIT_AT = 80  # 流式过程中无句末标点，达到该长度即尝试
 _WEAK_SEPS = ("\u3000", " ", "\t")
 # 口语与 JSON 分界（同行或换行后的 {）
 _JSON_START = re.compile(
-    r'(\n\s*\{|\{\s*"(form_update|emotion|gesture|scene)"|\{\s*\'form_update\')',
+    r'(\n\s*\{|\{\s*"form_update"|\{\s*\'form_update\')',
     re.IGNORECASE,
 )
 
@@ -35,7 +35,7 @@ def is_tts_safe_sentence(s: str) -> bool:
         return False
     if "form_update" in s:
         return False
-    if re.search(r'"(user_profile|current_topic|historical_interests|emotion|gesture|scene)"\s*:', s):
+    if re.search(r'"(user_profile|current_topic|historical_interests)"\s*:', s):
         return False
     if re.search(r"[\{\}\[\]]", s) and ("user_profile" in s or "historical_interests" in s):
         return False

@@ -7,7 +7,6 @@ import { LAppSubdelegate } from './lappsubdelegate';
 export class LAppView {
   public constructor() {
     this._programId = null;
-    this._touchManager = null;
     this._deviceToScreen = new CubismMatrix44();
     this._viewMatrix = new CubismViewMatrix();
   }

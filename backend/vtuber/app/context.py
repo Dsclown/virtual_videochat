@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from vtuber.config.loader import AppConfig, load_config
 from vtuber.modules.asr.factory import ASRFactory
 from vtuber.modules.avatar.factory import AvatarFactory
+from vtuber.modules.avatar.live2d_model import Live2dModel
 from vtuber.modules.avatar.playwright_manager import PlaywrightManager
 from vtuber.modules.llm.factory import LLMFactory
 from vtuber.modules.profile.form import ProfileFormStore
@@ -25,6 +26,18 @@ class ServiceContext:
         self.tts = TTSFactory.create(self.config.tts)
         self.avatar = AvatarFactory.create(self.config.avatar)
         self.playwright = PlaywrightManager(self.config.avatar)
+        self.live2d_model: Live2dModel | None = None
+        if (
+            self.config.avatar.enabled
+            and self.config.avatar.live2d_expressions_enabled
+        ):
+            try:
+                self.live2d_model = Live2dModel(
+                    self.config.avatar.model_name,
+                    self.config.avatar.model_dict_path,
+                )
+            except Exception:
+                logger.exception("Live2D model_dict 加载失败，表情/动作标签已禁用")
         self.profile = ProfileFormStore(self.config.profile)
         self._vad_backend: SileroVADBackend | None = VADFactory.create_backend(
             self.config.vad
