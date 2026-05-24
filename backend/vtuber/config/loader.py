@@ -101,6 +101,8 @@ class AvatarConfig:
     render_engine: str
     model_name: str
     models_root: str
+    asset_http_host: str
+    asset_http_port: int
     server_base_url: str
     width: int
     height: int

@@ -5,11 +5,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from gateway.auth import sanitize_user_id
-from gateway.config import PROJECT_ROOT, load_gateway_config
+from gateway.config import load_gateway_config
 from gateway.settings import CORE_GRPC_TARGET
 from gateway.web_session import WebGatewaySession
 
@@ -25,9 +24,6 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 app_config = load_gateway_config()
-
-RENDER_ENGINE_DIR = PROJECT_ROOT / "render-engine"
-LIVE2D_LIBS_DIR = PROJECT_ROOT / "assets" / "live2d" / "libs"
 
 
 class LoginBody(BaseModel):
@@ -48,15 +44,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-_models_dir = (PROJECT_ROOT / app_config.avatar.models_root).resolve()
-if _models_dir.is_dir():
-    app.mount("/live2d-models", StaticFiles(directory=str(_models_dir)), name="live2d-models")
-if LIVE2D_LIBS_DIR.is_dir():
-    app.mount("/live2d/libs", StaticFiles(directory=str(LIVE2D_LIBS_DIR)), name="live2d-libs")
-if RENDER_ENGINE_DIR.is_dir():
-    app.mount("/render-engine", StaticFiles(directory=str(RENDER_ENGINE_DIR)), name="render-engine")
-
 
 @app.post("/api/login")
 async def login(body: LoginBody):

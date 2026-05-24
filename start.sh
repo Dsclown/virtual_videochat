@@ -22,6 +22,7 @@ if [ ! -f "$ROOT/backend/vtuber/grpc/v1/core_pb2.py" ]; then
 fi
 
 CORE_PORT="${VVC_CORE_GRPC_PORT:-50051}"
+ASSET_PORT="${VVC_CORE_ASSET_HTTP_PORT:-50052}"
 HTTP_PORT="${VVC_HTTP_PORT:-8765}"
 WEB_PORT="${VVC_WEB_PORT:-8780}"
 GATEWAY_ORIGIN="${VVC_GATEWAY_ORIGIN:-http://127.0.0.1:${HTTP_PORT}}"
@@ -75,6 +76,7 @@ echo ""
 echo "  Web 测试界面: http://127.0.0.1:${WEB_PORT}"
 echo "  Gateway API:  ${GATEWAY_ORIGIN}"
 echo "  Core gRPC:    127.0.0.1:${CORE_PORT}"
+echo "  Core 资源 HTTP: 127.0.0.1:${ASSET_PORT}  (Live2D，Playwright)"
 echo "  日志前缀: [core] [gateway] [web]"
 echo ""
 

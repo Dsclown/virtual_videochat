@@ -184,7 +184,7 @@ async def stress_ws_voice_turn(
                     out["user_text"] = msg.get("text")
                     asr_at = time.perf_counter()
                     out["asr_s"] = round(asr_at - t0, 2)
-                elif t == "assistant_utterance" and msg.get("data"):
+                elif t == "assistant_utterance" and msg.get("text"):
                     out["utterances"] += 1
                 elif t == "turn_done":
                     out["ok"] = True

@@ -44,7 +44,9 @@ avatar:
   render_engine: cubism-sdk-live2d
   model_name: mao_pro
   models_root: assets/live2d/models
-  server_base_url: "http://127.0.0.1:8765"
+  asset_http_host: "0.0.0.0"          # Core 进程内 Live2D 静态资源 HTTP 绑定
+  asset_http_port: 50052                # 与 server_base_url 端口一致
+  server_base_url: "http://127.0.0.1:50052"   # Playwright 拉 render.html/模型；分机时改为 Core 可达地址
   view_scale: 0.9
   width: 360
   height: 360

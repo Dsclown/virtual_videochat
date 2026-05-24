@@ -1,71 +1,164 @@
 # virtual_videochat
 
-虚拟人视频对话：**Gateway**（WebRTC / WebSocket 接入）与 **Core**（VAD / ASR / LLM / TTS / Live2D 渲染）为两个独立进程，经 `proto/` gRPC 通信，**互不 import 对方业务代码**。
+虚拟人视频对话：**Gateway**（平台接入 / WebRTC / WebSocket）与 **Core**（对话编排 / Live2D 渲染 / 记忆 / 表单）为两个独立进程，经 `proto/vtuber/v1/core.proto` gRPC 双向流通信，**互不 import 对方业务代码**。
+
+流程图基于当前实现，使用 [Mermaid](https://mermaid.js.org/)，可在 GitHub README 中直接渲染。
 
 ---
 
-## 进程架构
+## 架构总览
 
+```mermaid
+flowchart TB
+  subgraph Browser["浏览器"]
+    UI["测试页 UI"]
+  end
+
+  subgraph WebProc["web/"]
+    STATIC["静态页 · gateway-config.js"]
+  end
+
+  subgraph GW["Gateway"]
+    WS["WebSocket /ws"]
+    WRTC["WebRTC egress"]
+    GCLI["CoreGrpcClient"]
+    BRIDGE["GatewayMediaBridge"]
+  end
+
+  subgraph Core["Core"]
+    GRPC["gRPC ConnectSession"]
+    SESS["CoreConversationSession"]
+    ORCH["ConversationOrchestrator"]
+    AV["AvatarRenderSession + Playwright"]
+    ASSET["Live2D 静态资源 HTTP"]
+  end
+
+  UI -->|HTTP 拉页面| STATIC
+  UI -->|WS 信令与麦克风| WS
+  UI -->|WebRTC recvonly| WRTC
+  WS --> GCLI
+  WRTC --> BRIDGE
+  GCLI <-->|"GatewayToCore / CoreToGateway"| GRPC
+  GRPC --> SESS
+  SESS --> ORCH
+  SESS --> AV
+  ORCH --> AV
+  AV -->|HTTP 模型与 render.html| ASSET
+  SESS -->|"MediaOut 音视频"| GRPC
+  GRPC --> BRIDGE
+  BRIDGE --> WRTC
 ```
-浏览器 → Web (:8780)  静态页 / 登录
-              │  WS
-              ▼
-         Gateway (:8765)  ──gRPC──►  Core (:50051)
-              │                         │
-    WebRTC / Live2D 静态资源          对话编排 / 记忆 / 表单
-```
 
-| 服务 | 目录 | 入口 | 默认端口 |
-|------|------|------|----------|
-| **Core** | `backend/` | `backend/core_main.py` | gRPC `50051` |
-| **Gateway** | `gateway/` | `gateway/main.py` | `8765` |
-| **Web 测试端** | `web/` | `web/main.py` | `8780` |
-| **契约** | `proto/vtuber/v1/core.proto` | `scripts/gen_grpc.py` | — |
-
-- Web 通过 `VVC_GATEWAY_ORIGIN`（默认 `http://127.0.0.1:8765`）访问 Gateway API。
-- Playwright 拉 Live2D 资源使用 `config.yaml` 中 `avatar.server_base_url`（指向 Gateway）。
-- ICE / TURN 由 Gateway 读取；Core 不加载 `ice_servers`。
-
----
-
-## 快速启动
-
-```bash
-cp config.example.yaml config.yaml
-# 编辑 config.yaml：llm.api_key、avatar、TURN 等
-./start.sh
-```
-
-浏览器打开 **http://127.0.0.1:8780**（不是 8765）。
-
-环境变量（可选）：
-
-| 变量 | 默认 | 说明 |
+| 组件 | 目录 | 职责 |
 |------|------|------|
-| `VVC_CORE_GRPC_PORT` | `50051` | Core gRPC |
-| `VVC_HTTP_PORT` | `8765` | Gateway |
-| `VVC_WEB_PORT` | `8780` | Web 测试页 |
-| `VVC_GATEWAY_ORIGIN` | `http://127.0.0.1:8765` | Web → Gateway |
+| **Core** | `backend/` | 会话、VAD/ASR/LLM/TTS、Avatar、用户数据 |
+| **Core 资源 HTTP** | `backend/`（`assets_http.py`） | Live2D / `render-engine`，供 Playwright 拉取 |
+| **Gateway** | `gateway/` | WS、WebRTC、转发 gRPC |
+| **Web** | `web/` | 静态测试页；浏览器 **直连** Gateway 做 WS/WebRTC（不经 Web 进程转发） |
 
-生成 gRPC 桩（改 proto 后执行）：
+---
 
-```bash
-backend/.venv/bin/python scripts/gen_grpc.py
+## 连接与鉴权（Web 测试端）
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as 浏览器
+  participant W as Web
+  participant G as Gateway
+  participant C as Core
+
+  B->>W: GET 静态页（login / chat）
+  B->>G: WebSocket /ws
+  Note over G: 建立 gRPC ConnectSession 双向流
+  G-->>B: await_auth
+  B->>G: auth { user_id }
+  G->>C: OpenSession platform=web_test
+  C->>C: 加载 profile_form · main.jsonl · 启动 VAD/Avatar
+  C-->>G: SessionReady
+  G-->>B: auth_ok
+  B->>G: webrtc_offer
+  G-->>B: webrtc_answer
+  Note over B,G: WebRTC 接收虚拟人音视频
 ```
 
 ---
 
-## 配置要点
+## 语音一轮（端到端）
 
-根目录 `config.yaml`（参考 `config.example.yaml`）。
+虚拟人**声音与画面**经 **WebRTC** 下发；聊天区**字幕**经 WS `assistant_utterance`（仅文本）。
 
-| 段 | 说明 |
-|----|------|
-| `character.system_prompt_file` | 角色人设，默认 `prompts/assistant.md` |
-| `profile.form_rules_file` | 用户表单维护规则，默认 `prompts/profile_form_rules.md` |
-| `memory.llm_context_rounds` | 送入 LLM 的最近对话轮数（每轮 user+assistant） |
-| `memory.storage_dir` / `profile.storage_dir` | 用户数据目录，默认 `data/users` |
-| `llm` / `asr` / `tts` / `vad` / `avatar` | 各模块提供商与参数 |
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as 浏览器
+  participant G as Gateway
+  participant C as CoreConversationSession
+  participant O as ConversationOrchestrator
+
+  par 媒体泵（与会话同生命周期）
+    loop 周期性 tick
+      C->>G: gRPC MediaOut audio/video
+      G->>B: WebRTC 轨
+    end
+  and 用户说话
+    loop 麦克风帧
+      B->>G: WS raw_audio
+      G->>C: AudioPcm
+      C->>C: VadSession.feed
+      C-->>G: vad 事件（可选）
+      G-->>B: WS vad
+    end
+    C->>C: speech_end 后 ASR
+    C-->>G: user_text
+    G-->>B: WS user_text
+    C->>O: run_turn_pcm → _run_dialogue
+    Note over O: 详见下节
+    O-->>G: assistant_utterance（文本）
+    G-->>B: WS 字幕
+    O-->>G: assistant_final · turn_done
+    G-->>B: WS
+  end
+```
+
+| 要点 | 说明 |
+|------|------|
+| 麦克风上行 | WS `raw_audio`，非 WebRTC 上行 |
+| 虚拟人音视频 | Core 渲染 → gRPC `MediaOut` → Gateway → WebRTC |
+| 表单与记忆 | Core 写 `profile_form.json`、`main.jsonl` |
+| 文本输入 | WS `user_text` 可走同一套编排（跳过 ASR） |
+
+---
+
+## Core 内：一轮对话编排时序
+
+```mermaid
+sequenceDiagram
+  participant O as ConversationOrchestrator
+  participant L as LLM 流
+  participant T as TtsSession
+  participant A as AvatarRenderSession
+  participant M as memory / profile
+  participant G as 经 gRPC 到 Gateway
+
+  O->>G: user_text
+  O->>T: async with TtsSession
+  loop 流式 token
+    L-->>O: token
+    O->>O: truncate_before_json · 切句
+    O->>T: speak（异步合成，按序下发）
+    T->>A: feed_utterance + Live2D 动作
+    T->>G: assistant_utterance
+  end
+  Note over O: 流结束后 flush 剩余口语句
+  O->>M: parse · append_turn · apply_update
+  O->>G: assistant_final
+  Note over T: 更早的 speak 可能仍在合成
+  O->>T: finish() 等待队列结束
+  O->>A: wait_playback_drained
+  O->>A: reset_to_idle_motion
+  O->>G: turn_done
+```
 
 ---
 
@@ -73,22 +166,25 @@ backend/.venv/bin/python scripts/gen_grpc.py
 
 目录：`data/users/{user_id}/`
 
-| 文件 | 格式 | 说明 |
-|------|------|------|
-| `profile_form.json` | JSON | 用户画像、当前话题、历史关注（见下） |
-| `main.jsonl` | 每行一轮 | `{"ts","user","assistant"}`，仅当日加载进内存 |
+| 文件 | 说明 |
+|------|------|
+| `profile_form.json` | 画像、当前话题、历史关注 |
+| `main.jsonl` | 当日对话轮次 |
 
-**历史关注**每条：`content`、`mention_count`、`last_mentioned_at`；最多 10 条（强 6 / 弱 4），由 Core 排序与淘汰。LLM 通过 `historical_interest_updates` 增量更新，规则见 `prompts/profile_form_rules.md`。
+规则见 `prompts/profile_form_rules.md`。
 
 ---
 
-## 单轮对话流程（Core）
+## 快速启动
 
-1. **构建上下文**：人设 + 表单规则 + 当前表单 + 最近 N 轮对话 + 本轮用户输入。
-2. **流式 LLM**：口语逐句送 TTS / Live2D；句末标点含 `。！？~～` 等（见 `sentence_buffer.py`）。
-3. **回合结束**：解析末尾 `form_update` JSON → 更新表单与 `main.jsonl`（表单写盘在线程池，不阻塞 TTS 播放）。
+```bash
+cp config.example.yaml config.yaml
+# 编辑 config.yaml（API Key 等）
+./start.sh
+```
 
-口语与表单分离：JSON / ` ``` ` 围栏不会进 TTS；表单字段以用户表述为主，规则见 `profile_form_rules.md`。
+生成 gRPC 桩：`backend/.venv/bin/python scripts/gen_grpc.py`  
+端口与环境变量见 `config.example.yaml`、`start.sh`。
 
 ---
 
@@ -96,38 +192,19 @@ backend/.venv/bin/python scripts/gen_grpc.py
 
 ```
 virtual_videochat/
-├── config.yaml / config.example.yaml
-├── prompts/
-│   ├── assistant.md              # 角色人设
-│   └── profile_form_rules.md     # 用户表单维护规则（LLM system 注入）
 ├── proto/vtuber/v1/core.proto
-├── scripts/gen_grpc.py
-├── data/users/                   # 运行时用户数据
-├── gateway/                      # Gateway（WebRTC、WS、gRPC 客户端）
-│   ├── main.py
-│   ├── web_session.py
-│   ├── core_client.py
-│   └── grpc/v1/                  # 生成
-├── web/                          # 测试页（静态资源 + 登录）
-│   ├── main.py
-│   └── app.js
-└── backend/                      # Core
-    ├── core_main.py
-    └── vtuber/
-        ├── grpc/servicer.py
-        ├── core/
-        │   ├── conversation_session.py
-        │   └── orchestrator.py
-        ├── modules/
-        │   ├── profile/            # 表单存储、历史关注、回复解析
-        │   ├── memory/             # 对话轮次 jsonl
-        │   ├── llm|asr|tts|vad|avatar/
-        │   └── ...
-        └── utils/sentence_buffer.py  # 流式切句 / 剥离 JSON
+├── gateway/
+├── web/
+├── assets/live2d/
+├── render-engine/
+└── backend/
+    └── vtuber/core/
+        ├── conversation_session.py
+        └── orchestrator.py
 ```
 
 ---
 
 ## 扩展第三方平台
 
-在 `gateway/` 下新增平台适配，复用 `core_client.py` 与 `webrtc_egress.py`；**勿改** `backend/vtuber/core/` 编排主流程。业务规则与 prompt 优先改 `prompts/` 与 `config.yaml`，而非硬编码进 Gateway。
+在 `gateway/` 增加会话适配，复用 `core_client.py`、`webrtc_egress.py`；Core 编排与 Avatar 逻辑保持不变。

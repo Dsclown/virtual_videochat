@@ -68,6 +68,9 @@ class VtuberCoreServicer(core_pb2_grpc.VtuberCoreServicer):
                     holder["session_id"] = sid
 
                     if req.HasField("open"):
+                        old = holder.get("session")
+                        if old is not None:
+                            await old.close()
                         sess = CoreConversationSession(
                             sid,
                             self._ctx,

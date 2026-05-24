@@ -1,7 +1,6 @@
 """TTS 回合会话：切句后并行合成、按序下发；``async with`` 退出时自动释放。"""
 
 import asyncio
-import base64
 import logging
 from typing import Awaitable, Callable
 
@@ -21,7 +20,7 @@ class TtsSession:
         send: SendFn,
         tts: TTSModule,
         *,
-        avatar: AvatarRenderSession | None = None,
+        avatar: AvatarRenderSession,
     ):
         self._send = send
         self._tts = tts
@@ -82,7 +81,6 @@ class TtsSession:
         self,
         text: str,
         seq: int,
-        audio: bytes | None,
         *,
         live2d_actions: list[int | str] | None = None,
     ) -> dict:
@@ -90,10 +88,6 @@ class TtsSession:
             "type": "assistant_utterance",
             "text": text,
             "index": seq,
-            "format": "mp3",
-            "data": None
-            if self._avatar
-            else (base64.b64encode(audio).decode("ascii") if audio else None),
         }
         if live2d_actions:
             payload["live2d_actions"] = live2d_actions
@@ -116,7 +110,7 @@ class TtsSession:
         except asyncio.CancelledError:
             if not self._shutdown:
                 await self._payload_queue.put(
-                    (self._build_payload(text, seq, None, live2d_actions=live2d_actions), seq, None)
+                    (self._build_payload(text, seq, live2d_actions=live2d_actions), seq, None)
                 )
             raise
         except Exception:
@@ -128,7 +122,7 @@ class TtsSession:
         # 失败/超时也占位入队，避免 sender 卡在某个 seq 导致后续句永不播放（对齐 OLV silent payload）
         await self._payload_queue.put(
             (
-                self._build_payload(text, seq, audio, live2d_actions=live2d_actions),
+                self._build_payload(text, seq, live2d_actions=live2d_actions),
                 seq,
                 audio,
             )
@@ -137,7 +131,7 @@ class TtsSession:
     async def _feed_avatar_in_order(
         self, mp3: bytes | None, payload: dict
     ) -> None:
-        if not mp3 or not self._avatar:
+        if not mp3:
             return
         try:
             actions = payload.get("live2d_actions")

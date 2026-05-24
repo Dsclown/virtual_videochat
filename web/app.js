@@ -23,14 +23,13 @@ function setAvatarStatus(text) {
 /** 启用 Avatar 时需等 WebRTC 画面就绪后才可开始聆听 */
 function updateListenButtonState() {
   if (!btnToggleListen) return;
-  const needVideo = avatarEnabled;
-  const videoReady = !needVideo || avatarStreamConnected;
+  const videoReady = avatarStreamConnected;
   btnToggleListen.disabled = !authed || !videoReady;
   if (!authed || listeningActive) return;
-  if (needVideo && !videoReady) {
+  if (!videoReady) {
     statusText.textContent = "已连接，等待视频流…";
-  } else if (videoReady) {
-    statusText.textContent = needVideo ? "视频已连接，可开始聆听" : "已连接，可开始聆听";
+  } else {
+    statusText.textContent = "视频已连接，可开始聆听";
   }
 }
 
@@ -191,7 +190,6 @@ function closeAvatarStreams() {
 }
 
 function startAvatarVideo() {
-  if (!avatarEnabled) return;
   startAvatarWebRTC().catch((e) => {
     setAvatarStatus(`WebRTC: ${e.message}`);
   });
@@ -211,7 +209,7 @@ async function waitIceGathering(pc) {
 }
 
 async function startAvatarWebRTC() {
-  if (!avatarEnabled || avatarPc) return;
+  if (avatarPc) return;
   if (typeof RTCPeerConnection === "undefined") {
     setAvatarStatus("浏览器不支持 WebRTC");
     return;
@@ -273,15 +271,6 @@ let audioContext = null;
 let scriptProcessor = null;
 let micSource = null;
 let vadEnabled = false;
-let audioQueue = [];
-let isPlaying = false;
-/** 每次打断递增，用于丢弃打断前已在途的 TTS 分片 */
-let playbackGeneration = 0;
-/** 与 playbackGeneration 配合，取消尚未完成的 play() */
-let activePlayId = 0;
-/** 当前正在播放的 blob URL（stop 时需单独 revoke） */
-let currentPlayUrl = null;
-const ttsPlayer = document.getElementById("ttsPlayer");
 /** 与服务端 turn_id 对齐，丢弃已打断回合的迟到 utterance */
 let serverTurnId = 0;
 /** 当前轮助手回复气泡（按句追加，与 TTS 同步） */
@@ -295,7 +284,7 @@ const btnToggleListen = document.getElementById("btnToggleListen");
 const btnReset = document.getElementById("btnReset");
 const userBadge = document.getElementById("userBadge");
 
-userBadge.textContent = `用户: ${userId}`;
+if (userBadge && userId) userBadge.textContent = `用户: ${userId}`;
 
 function appendMsg(role, text) {
   const el = document.createElement("div");
@@ -394,16 +383,19 @@ function handleServerMessage(msg) {
       }
       avatarIceTransportPolicy = msg.ice_transport_policy || "all";
       updateListenButtonState();
+      if (!avatarEnabled) {
+        appendMsg("system", "虚拟人未就绪，请检查 Core Playwright 配置");
+        statusText.textContent = "Avatar 不可用";
+        break;
+      }
       appendMsg(
         "system",
         `已登录 ${msg.user_id}${vadEnabled ? "（Silero VAD）" : "（VAD 未启用）"}`
       );
-      if (avatarEnabled) {
-        if (msg.avatar_webrtc) {
-          startAvatarVideo();
-        } else {
-          setAvatarStatus("Avatar 需要 WebRTC（请检查 webrtc_enabled）");
-        }
+      if (msg.avatar_webrtc) {
+        startAvatarVideo();
+      } else {
+        setAvatarStatus("需要 WebRTC（请检查 webrtc_enabled）");
       }
       break;
     case "webrtc_answer":
@@ -423,11 +415,8 @@ function handleServerMessage(msg) {
     case "vad":
       if (msg.event === "speech_start") {
         liveText.textContent = "检测到说话…";
-        // 不依赖 stage：只要 TTS 在播/排队就立刻停（避免 stage 已是 listening 时漏停当句）
-        if (isPlaying || audioQueue.length > 0 || (ttsPlayer && !ttsPlayer.paused)) {
-          stopPlayback();
-          assistantTurnEl = null;
-        }
+        // 打断由服务端 turn_cancelled + Gateway 清空媒体缓冲处理；勿 pause WebRTC video
+        assistantTurnEl = null;
       } else if (msg.event === "speech_end") {
         liveText.textContent = "语音结束，识别中…";
       } else if (msg.event === "filtered") {
@@ -452,9 +441,6 @@ function handleServerMessage(msg) {
         chatLog.scrollTop = chatLog.scrollHeight;
         liveText.textContent = msg.text;
       }
-      if (msg.data && !avatarEnabled) {
-        enqueueAudio(msg.data, msg.format || "mp3");
-      }
       break;
     case "assistant_final":
       if (!acceptTurnMsg(msg)) break;
@@ -463,7 +449,6 @@ function handleServerMessage(msg) {
       break;
     case "turn_cancelled":
       syncTurnId(msg);
-      stopPlayback();
       assistantTurnEl = null;
       liveText.textContent = "已打断 AI，请继续说话";
       break;
@@ -473,7 +458,6 @@ function handleServerMessage(msg) {
       break;
     case "reset_ok":
       syncTurnId(msg);
-      stopPlayback();
       assistantTurnEl = null;
       if (listeningActive && !listenPaused && authed) resumeListening();
       break;
@@ -482,123 +466,13 @@ function handleServerMessage(msg) {
       if (msg.message && String(msg.message).includes("Avatar")) {
         setAvatarStatus(`Avatar: ${msg.message}`);
       }
-      stopPlayback();
       if (listeningActive && !listenPaused && authed) resumeListening();
       break;
   }
 }
 
-function detachTtsHandlers() {
-  ttsPlayer.onended = null;
-  ttsPlayer.onerror = null;
-}
-
-function enqueueAudio(b64, format) {
-  const gen = playbackGeneration;
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const url = URL.createObjectURL(new Blob([bytes], { type: `audio/${format}` }));
-  audioQueue.push({ url, gen });
-  playNext();
-}
-
-function stopPlayback() {
-  playbackGeneration += 1;
-  activePlayId += 1;
-  detachTtsHandlers();
-  audioQueue.forEach((item) => URL.revokeObjectURL(item.url));
-  audioQueue = [];
-  isPlaying = false;
-  if (currentPlayUrl) {
-    URL.revokeObjectURL(currentPlayUrl);
-    currentPlayUrl = null;
-  }
-  if (!ttsPlayer) return;
-  try {
-    ttsPlayer.pause();
-    ttsPlayer.currentTime = 0;
-    ttsPlayer.removeAttribute("src");
-    ttsPlayer.load();
-  } catch (_) {
-    /* ignore */
-  }
-}
-
-function playNext() {
-  while (audioQueue.length && audioQueue[0].gen !== playbackGeneration) {
-    URL.revokeObjectURL(audioQueue.shift().url);
-  }
-  if (isPlaying || !audioQueue.length || !ttsPlayer) return;
-
-  const { url, gen } = audioQueue.shift();
-  const playId = ++activePlayId;
-  isPlaying = true;
-  currentPlayUrl = url;
-
-  detachTtsHandlers();
-  ttsPlayer.src = url;
-
-  const done = () => {
-    detachTtsHandlers();
-    if (currentPlayUrl === url) {
-      URL.revokeObjectURL(url);
-      currentPlayUrl = null;
-    } else {
-      URL.revokeObjectURL(url);
-    }
-    isPlaying = false;
-    if (!ttsPlayer) return;
-    try {
-      ttsPlayer.pause();
-      ttsPlayer.currentTime = 0;
-      ttsPlayer.removeAttribute("src");
-      ttsPlayer.load();
-    } catch (_) {
-      /* ignore */
-    }
-    if (playId === activePlayId && gen === playbackGeneration) playNext();
-  };
-
-  ttsPlayer.onended = done;
-  ttsPlayer.onerror = done;
-
-  const playPromise = ttsPlayer.play();
-  if (playPromise && typeof playPromise.then === "function") {
-    playPromise
-      .then(() => {
-        if (playId !== activePlayId || gen !== playbackGeneration) {
-          detachTtsHandlers();
-          if (currentPlayUrl === url) {
-            URL.revokeObjectURL(url);
-            currentPlayUrl = null;
-          } else {
-            URL.revokeObjectURL(url);
-          }
-          try {
-            ttsPlayer.pause();
-            ttsPlayer.currentTime = 0;
-            ttsPlayer.removeAttribute("src");
-            ttsPlayer.load();
-          } catch (_) {
-            /* ignore */
-          }
-          isPlaying = false;
-        }
-      })
-      .catch(done);
-  }
-}
-
 function finishTurnAndResumeListen() {
-  const wait = () => {
-    if (!isPlaying && audioQueue.length === 0) {
-      if (listeningActive && !listenPaused && authed) resumeListening();
-    } else {
-      setTimeout(wait, 150);
-    }
-  };
-  wait();
+  if (listeningActive && !listenPaused && authed) resumeListening();
 }
 
 function connect() {
@@ -647,4 +521,7 @@ btnReset.addEventListener("click", () => {
   assistantTurnEl = null;
   sendJson({ type: "reset" });
 });
-connect();
+
+if (userId) {
+  connect();
+}

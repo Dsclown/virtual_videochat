@@ -48,6 +48,8 @@ class PlaywrightRenderer:
         self._canvas: Locator | None = None
         self._mouth = 0.0
         self._closed = False
+        self._start_lock = asyncio.Lock()
+        self._ready_task: asyncio.Task | None = None
 
     async def _page_ready(self) -> bool:
         if self._closed or not self._page:
@@ -62,26 +64,31 @@ class PlaywrightRenderer:
             return False
 
     async def start(self, *, wait_ready: bool = True) -> None:
-        if await self._page_ready():
-            return
+        async with self._start_lock:
+            if await self._page_ready():
+                return
+            if self._ready_task and not self._ready_task.done():
+                if wait_ready:
+                    await self._ready_task
+                return
 
-        if self._page:
-            try:
-                await self._page.close()
-            except Exception:
-                pass
-            self._page = None
-            self._canvas = None
+            if self._page:
+                try:
+                    await self._page.close()
+                except Exception:
+                    pass
+                self._page = None
+                self._canvas = None
 
-        self._closed = False
-        self._page = await self._manager.new_page()
-        url = self._manager.render_page_url()
-        logger.debug("Avatar 渲染页: %s", url)
-        await self._page.goto(url, wait_until="domcontentloaded", timeout=120_000)
-        if wait_ready:
-            await self._wait_until_ready()
-        else:
-            asyncio.create_task(self._wait_until_ready())
+            self._closed = False
+            self._page = await self._manager.new_page()
+            url = self._manager.render_page_url()
+            logger.debug("Avatar 渲染页: %s", url)
+            await self._page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+            if wait_ready:
+                await self._wait_until_ready()
+            else:
+                self._ready_task = asyncio.create_task(self._wait_until_ready())
 
     async def _wait_until_ready(self) -> None:
         if not self._page or self._closed:

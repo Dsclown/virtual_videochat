@@ -31,7 +31,6 @@ class GatewayAvatarConfig:
     webrtc_enabled: bool
     ice_transport_policy: str
     ice_servers: list[IceServerConfig]
-    models_root: str
 
 
 @dataclass
@@ -56,7 +55,7 @@ def load_gateway_config(path: Path | None = None) -> GatewayConfig:
         raise GatewayConfigError("config.yaml 格式无效")
 
     av = _require_avatar(raw)
-    for key in ("enabled", "webrtc_enabled", "ice_transport_policy", "ice_servers", "models_root"):
+    for key in ("enabled", "webrtc_enabled", "ice_transport_policy", "ice_servers"):
         if key not in av:
             raise GatewayConfigError(f"avatar 缺少 Gateway 必填项: {key}")
 
@@ -75,7 +74,6 @@ def load_gateway_config(path: Path | None = None) -> GatewayConfig:
             webrtc_enabled=bool(av["webrtc_enabled"]),
             ice_transport_policy=str(av["ice_transport_policy"]),
             ice_servers=ice_servers,
-            models_root=str(av["models_root"]),
         )
     )
 

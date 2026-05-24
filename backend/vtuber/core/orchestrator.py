@@ -37,7 +37,7 @@ class ConversationOrchestrator:
         user_id: str,
         send: SendFn,
         *,
-        avatar: AvatarRenderSession | None = None,
+        avatar: AvatarRenderSession,
         memory: MemoryModule | None = None,
         chat_turns: list[ChatTurn] | None = None,
         llm_context_rounds: int = 5,
@@ -153,9 +153,8 @@ class ConversationOrchestrator:
         if self._stopped:
             return
 
-        if self._avatar:
-            await self._avatar.wait_playback_drained()
-            await self._avatar.reset_to_idle_motion()
+        await self._avatar.wait_playback_drained()
+        await self._avatar.reset_to_idle_motion()
 
         await self._send({"type": "turn_done"})
         await self._set_stage(Stage.LISTENING)

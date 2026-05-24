@@ -52,7 +52,7 @@ class CoreConversationSession:
         self._chat_turns: list[ChatTurn] = []
         self._vad: VadSession | None = None
         self._orchestrator: ConversationOrchestrator | None = None
-        self._avatar: AvatarRenderSession | None = None
+        self._avatar: AvatarRenderSession | None = None  # open() 成功后必有
 
         self._turn_id = 0
         self._gen = 0
@@ -89,19 +89,23 @@ class CoreConversationSession:
                 run_vad=self._ctx.run_vad,
             )
 
-        if self._ctx.playwright.enabled:
-            self._avatar = AvatarRenderSession(
-                self._ctx.playwright,
-                self._config.avatar,
-                live2d_model=self._ctx.live2d_model,
-            )
-            await self._avatar.start(wait_ready=False)
-            self._start_media_pumps()
+        if not self._ctx.playwright.enabled:
+            msg = "未启用 Playwright，无法启动虚拟人 Avatar"
+            await self._emit({"type": "error", "message": msg})
+            raise RuntimeError(msg)
+
+        self._avatar = AvatarRenderSession(
+            self._ctx.playwright,
+            self._config.avatar,
+            live2d_model=self._ctx.live2d_model,
+        )
+        await self._avatar.start(wait_ready=False)
+        self._start_media_pumps()
 
         self._audio_task = asyncio.create_task(self._audio_loop())
         return {
             "vad_enabled": self._vad is not None,
-            "avatar_enabled": self._avatar is not None,
+            "avatar_enabled": True,
         }
 
     async def _vad_send(self, msg: dict) -> None:
@@ -266,8 +270,6 @@ class CoreConversationSession:
             self._turn_running = False
 
     def _start_media_pumps(self) -> None:
-        if not self._avatar:
-            return
         self._media_tasks = [
             asyncio.create_task(self._av_media_loop()),
         ]
